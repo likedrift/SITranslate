@@ -1,0 +1,19 @@
+{
+  "name": "si-translate",
+  "version": "0.1.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "build": "node scripts/build.mjs",
+    "check": "tsc --noEmit",
+    "test": "node --import tsx --test tests/*.test.ts",
+    "test:browser": "node tests/browser.mjs"
+  },
+  "devDependencies": {
+    "@types/chrome": "^0.0.287",
+    "playwright": "^1.58.0",
+    "tsx": "^4.20.0",
+    "typescript": "^5.8.0",
+    "vite": "^6.3.0"
+  }
+}

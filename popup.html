@@ -1,0 +1,13 @@
+<!doctype html>
+<html lang="zh-Hans"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>思译</title><link rel="stylesheet" href="/src/ui/style.css"></head>
+<body class="popup"><main>
+  <header class="brand"><span class="brand-mark" aria-hidden="true">译</span><div><h1>思译 <span class="brand-en">Si Translate</span></h1><p>让语言不再打断阅读</p></div><button class="icon-button" id="settings" title="打开设置" aria-label="打开设置">⚙</button></header>
+  <div class="popup-fields"><label>翻译为<select id="target"></select></label><label>使用模型<select id="profile"></select></label></div>
+  <fieldset class="segmented"><legend class="sr-only">显示方式</legend><label><input type="radio" name="display" value="replace" checked><span>译文</span></label><label><input type="radio" name="display" value="bilingual"><span>双语对照</span></label></fieldset>
+  <button class="primary translate-button" id="translate"><span aria-hidden="true">文 ⇄ A</span> 翻译此页</button>
+  <section class="progress-card" aria-live="polite"><div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div><progress id="progress" value="0" max="1" aria-label="页面翻译进度"></progress><p id="detail">翻译当前页面，保留链接与格式。</p></section>
+  <div class="row actions"><button class="secondary" id="stop" disabled>停止</button><button class="secondary" id="restore">恢复原文</button><button class="text-button" id="retry" hidden>重试失败部分</button></div>
+  <p class="notice" id="error" role="alert" hidden></p>
+  <div class="selection-help"><span class="small-icon" aria-hidden="true">⌁</span><div><strong>只想翻译一句？</strong><p>选中文字，再点击浮动的“译”按钮。</p><button class="text-button compact" id="grant-site" disabled>正在读取划词状态…</button></div></div>
+  <footer><span>仅在你点击后发送文字</span><kbd>Alt ⇧ T</kbd></footer>
+</main><script type="module" src="/src/ui/popup.ts"></script></body></html>

@@ -1,0 +1,10 @@
+<!doctype html><html lang="en"><head><meta charset="utf-8"><title>Translation test article</title><style>body{font:16px system-ui;margin:40px auto;max-width:760px;line-height:1.8;padding:0 20px}h1{line-height:1.3}.box{padding:22px;border-radius:14px;background:#f2f4fa;margin:18px 0}button{padding:8px 18px}.hidden{display:none}</style></head><body>
+<h1>A page with more than one language</h1>
+<p id="plain">Hello world.</p><p id="mixed">English and 日本語 mixed.</p>
+<p id="inline">Read <a id="link" href="#details">documentation</a> carefully.</p>
+<div class="box"><p id="selection">This is the selected sentence.</p><p>这一句已经是中文。</p></div>
+<p id="changing">Original content.</p><button id="button">Click me</button><span id="click-count">0</span>
+<pre id="code">const message = "Do not translate code";</pre><input id="input" value="Do not translate my input"><div contenteditable="true" id="editable">Editable content</div>
+<p class="hidden" id="hidden">Hidden content</p><p translate="no" id="protected">Protected content</p><div id="dynamic"></div>
+<script>document.querySelector('#button').addEventListener('click',()=>document.querySelector('#click-count').textContent=String(Number(document.querySelector('#click-count').textContent)+1));</script>
+</body></html>
