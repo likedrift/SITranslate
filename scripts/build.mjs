@@ -12,6 +12,10 @@ await build({ configFile: false, publicDir: false, build: { outDir: 'dist', empt
   rollupOptions: { output: { inlineDynamicImports: true } }
 } });
 
+await build({ configFile:false,publicDir:false,build:{outDir:'dist',emptyOutDir:false,
+  lib:{entry:'src/video.ts',name:'SiVideoTranslate',formats:['iife'],fileName:()=> 'video.js'},
+  rollupOptions:{output:{inlineDynamicImports:true}}} });
+
 // Small raster toolbar icons, generated locally without an external font or image dependency.
 function crc32(bytes) { let crc = -1; for (const b of bytes) { crc ^= b; for (let k=0;k<8;k++) crc = (crc>>>1) ^ (0xedb88320 & -(crc&1)); } return (crc^-1)>>>0; }
 function chunk(type, body) { const t=Buffer.from(type); const size=Buffer.alloc(4); size.writeUInt32BE(body.length); const crc=Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t,body]))); return Buffer.concat([size,t,body,crc]); }

@@ -7,6 +7,7 @@ import {TranslationCache,cacheKey} from '../src/core/cache.ts';
 import {CompatibleAdapter,readSSE} from '../src/core/provider.ts';
 import {SharedWork} from '../src/core/shared.ts';
 import {estimateOutputTokens} from '../src/core/text.ts';
+import {cueIndex,activeSubtitle,subtitleText} from '../src/core/subtitles.ts';
 const input:TranslationInput={kind:'page',profileId:'deepseek-default',taskId:'task',requestId:'request',target:'zh-Hans',blocks:[{id:'b1',context:'Read documentation carefully.',segments:[{id:'s1',text:'Read '},{id:'s2',text:'documentation'},{id:'s3',text:' carefully.'}]}]};
 test('batch heuristic reserves more output room for CJK and segment identifiers',()=>{
   assert.ok(estimateOutputTokens('日本語'.repeat(300))>estimateOutputTokens('English'.repeat(130)));
@@ -110,4 +111,36 @@ test('authentication failure is actionable, non-retryable, and does not expose p
   const original=globalThis.fetch;globalThis.fetch=(async()=>new Response('secret-provider-diagnostic',{status:401}))as typeof fetch;
   try{await assert.rejects(new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],apiKey:'secret'},input,new AbortController().signal),error=>error instanceof Error&&/API Key/.test(error.message)&&!error.message.includes('secret-provider'));
   }finally{globalThis.fetch=original;}
+});
+test('subtitle timeline handles seeking, overlapping cues and exclusive end boundaries',()=>{
+  const cues=[{id:'one',start:0,end:5,text:'one',context:''},{id:'two',start:3,end:8,text:'two',context:''}];
+  assert.deepEqual(activeSubtitle(cues,4).map(c=>c.id),['one','two']);assert.deepEqual(activeSubtitle(cues,5).map(c=>c.id),['two']);
+  assert.deepEqual(activeSubtitle(cues,8),[]);assert.equal(cueIndex([{startTime:0},{startTime:3},{startTime:8}],4),2);
+  assert.equal(subtitleText(' one\n  two '),'one two');assert.equal(subtitleText('a'.repeat(3000)).length,2000);
+});
+test('truncated output splits into bounded smaller requests and accounts for all received usage',async()=>{
+  const original=globalThis.fetch,requests:any[]=[];
+  globalThis.fetch=(async(_url,options)=>{
+    const body=JSON.parse(String(options?.body));requests.push(body);const segments=JSON.parse(body.messages[1].content).blocks.flatMap((b:any)=>b.segments);
+    const truncated=segments.length>1;
+    return new Response(JSON.stringify({choices:[{finish_reason:truncated?'length':'stop',message:{content:truncated?'{"segments":[':JSON.stringify({segments:segments.map((s:any)=>({id:s.id,text:'译文'}))})}}],usage:{prompt_tokens:10,completion_tokens:5}}));
+  }) as typeof fetch;
+  try{
+    const result=await new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],stream:false},input,new AbortController().signal);
+    assert.deepEqual(result.segments.map(s=>s.id),['s1','s2','s3']);assert.equal(requests.length,5);assert.equal(result.usage.input,50);assert.equal(result.usage.requests,5);
+    assert.ok(requests.every(r=>r.max_tokens>=1024&&r.max_tokens<=8192));
+  }finally{globalThis.fetch=original;}
+});
+test('malformed responses stop after bounded subdivision and authentication is never subdivided',async()=>{
+  const original=globalThis.fetch;let calls=0;
+  globalThis.fetch=(async()=>{calls++;return new Response(JSON.stringify({choices:[{message:{content:'{bad json'}}]}));}) as typeof fetch;
+  try{
+    await assert.rejects(new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],stream:false},input,new AbortController().signal),/不完整/);assert.ok(calls<=3);
+    calls=0;globalThis.fetch=(async()=>{calls++;return new Response('',{status:401});}) as typeof fetch;
+    await assert.rejects(new CompatibleAdapter().translate(DEFAULT_SETTINGS.profiles[0],input,new AbortController().signal),/API Key/);assert.equal(calls,1);
+  }finally{globalThis.fetch=original;}
+});
+test('SSE retains length termination even when usage arrives in a separate frame',async()=>{
+  const wire='data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":5}}\n\ndata: [DONE]\n\n';
+  const result=await readSSE(new Response(wire),new AbortController().signal);assert.equal(result.finishReason,'length');assert.equal(result.usage.prompt_tokens,5);
 });

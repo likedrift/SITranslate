@@ -1,8 +1,8 @@
 {
   "manifest_version": 3,
   "name": "Si Translate · 思译",
-  "version": "0.1.2",
-  "description": "使用你选择的大模型翻译网页与选中文字。按需翻译，轻量、可恢复原文。",
+  "version": "0.2.0",
+  "description": "使用你选择的大模型翻译网页、选中文字与视频字幕。按需翻译，轻量、可恢复原文。",
   "minimum_chrome_version": "120",
   "permissions": ["activeTab", "scripting", "storage", "contextMenus"],
   "host_permissions": ["https://*/*", "http://*/*"],

@@ -1,4 +1,4 @@
-import {type Settings,type PageStatus} from '../core/types';
+import {type Settings,type PageStatus,type VideoStatus} from '../core/types';
 import {rpc,el,value,languageOptions,sitePattern} from './client';
 let settings:Settings;let busy=false;let currentTab:chrome.tabs.Tab|undefined;
 async function refreshSelection(){
@@ -19,6 +19,17 @@ function paint(s:PageStatus){
   el('retry').hidden=!s.failed;el<HTMLButtonElement>('translate').disabled=busy||['scanning','translating'].includes(s.state);
 }
 async function refresh(){try{paint(await rpc<PageStatus>('tab:status'));}catch(err){error(err instanceof Error?err.message:'无法访问当前页面。');}}
+function paintVideo(s:VideoStatus){
+  el('video-state').textContent=[s.source,s.message,s.completed?`已翻译 ${s.completed} 条字幕`: ''].filter(Boolean).join(' · ');
+  el<HTMLButtonElement>('video-stop').disabled=!['loading','active'].includes(s.state);
+  el('video-retry').hidden=s.state!=='active';el<HTMLButtonElement>('video-start').disabled=s.state==='loading';
+  el('video-start').textContent=s.state==='active'?'重新开始':'翻译视频字幕';
+  el<HTMLInputElement>('video-bilingual').checked=s.bilingual;
+}
+async function refreshVideo(){try{paintVideo(await rpc<VideoStatus>('video:status'));}catch{ /* Restricted pages retain the start action's explicit error. */ }}
+async function videoAction(action:string){try{error('');await preferences();paintVideo(await rpc<VideoStatus>('video:action',{action,bilingual:el<HTMLInputElement>('video-bilingual').checked}));}catch(err){error(err instanceof Error?err.message:'无法操作视频字幕。');}}
+for(const [id,action] of [['video-start','start'],['video-stop','stop'],['video-retry','retry']])el(id).addEventListener('click',()=>void videoAction(action));
+el('video-bilingual').addEventListener('change',()=>void videoAction('display'));
 async function action(action:string){busy=true;error('');el<HTMLButtonElement>('translate').disabled=true;try{await preferences();await rpc('tab:action',{action});await refresh();}catch(err){error(err instanceof Error?err.message:'操作失败。');}finally{busy=false;el<HTMLButtonElement>('translate').disabled=false;}}
 el('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 for(const [id,act]of [['translate','start'],['stop','stop'],['restore','restore'],['retry','retry']])el(id).addEventListener('click',()=>void action(act));
@@ -45,8 +56,10 @@ async function init(){
   const active=settings.profiles.find(p=>p.id===settings.activeProfileId);if(!active?.apiKey)error('首次使用：请在设置中填写 API Key 和模型。');
   await refresh();
   await refreshSelection();
+  await refreshVideo();
 }
 chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Object.keys(changes).some(key=>key.startsWith('page:')))void refresh();if(area==='local'&&changes.selectionOrigins)void refreshSelection().catch(err=>error(err.message));});
 chrome.permissions.onAdded.addListener(()=>void refreshSelection().catch(()=>{}));
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection().catch(()=>{}));
 void init().catch(err=>error(err.message));
+setInterval(()=>void refreshVideo(),1000);

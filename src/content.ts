@@ -6,7 +6,7 @@ const scope=globalThis as typeof globalThis & {__siTranslate?:boolean};
 if(!scope.__siTranslate){scope.__siTranslate=true;boot();}
 
 function boot(){
-  const blocked='script,style,noscript,code,pre,kbd,samp,textarea,input,select,option,svg,math,canvas,[contenteditable]:not([contenteditable="false"]),[translate="no"],[hidden],[aria-hidden="true"],[data-si-owned]';
+  const blocked='script,style,noscript,code,pre,kbd,samp,textarea,input,select,option,svg,math,canvas,video,audio,track,.ytp-caption-window-container,[contenteditable]:not([contenteditable="false"]),[translate="no"],[hidden],[aria-hidden="true"],[data-si-owned]';
   const selectionBlocked='input,textarea,select,[contenteditable]:not([contenteditable="false"]),[data-si-owned]';
   const blockSelector='p,h1,h2,h3,h4,h5,h6,li,td,th,dt,dd,button,label,figcaption,blockquote,summary,caption';
   interface Record {node:Text;source:string;applied:string;ids:string[];texts:Map<string,string>;root:Element;annotation?:HTMLElement;version:number;state:'queued'|'translated'|'failed'}

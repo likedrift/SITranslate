@@ -22,17 +22,18 @@ export interface PublicConfig {
 export interface Segment { id: string; text: string }
 export interface TextBlock { id: string; context: string; segments: Segment[] }
 export interface TranslationInput {
-  kind: 'page' | 'selection' | 'test'; requestId: string; taskId: string;
+  kind: 'page' | 'selection' | 'subtitle' | 'test'; requestId: string; taskId: string;
   profileId: string; target: string; blocks: TextBlock[];
 }
 export interface TranslationResult {
-  segments: Segment[]; cached: boolean; usage: { input: number; output: number; estimatedCost: number };
+  segments: Segment[]; cached: boolean; usage: { input: number; output: number; estimatedCost: number; requests?:number };
 }
 export interface PageStatus {
   state: 'idle' | 'scanning' | 'translating' | 'watching' | 'done' | 'stopped';
   total: number; completed: number; failed: number; chars: number;
   limited: boolean; message: string; display: DisplayMode;
 }
+export interface VideoStatus {state:'idle'|'loading'|'active'|'stopped'|'error';source:string;completed:number;message:string;bilingual:boolean}
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
   profiles: [{ id: 'deepseek-default', name: 'DeepSeek', type: 'deepseek',
@@ -43,6 +44,7 @@ export const DEFAULT_SETTINGS: Settings = {
 };
 export const EMPTY_STATUS: PageStatus = {state: 'idle', total: 0, completed: 0,
   failed: 0, chars: 0, limited: false, message: '', display: 'replace'};
+export const EMPTY_VIDEO_STATUS:VideoStatus={state:'idle',source:'',completed:0,message:'有字幕的视频可开启翻译。',bilingual:true};
 export function isTarget(target: unknown): target is string {
   return typeof target === 'string' && LANGUAGES.some(([id]) => id === target);
 }

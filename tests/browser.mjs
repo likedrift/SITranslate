@@ -8,22 +8,28 @@ import {performance} from 'node:perf_hooks';
 const root=process.cwd(),results=[],requests=[];
 let behavior='normal',delay=0;
 const fixture=await readFile('tests/fixtures/article.html','utf8');
+const videoFixture=await readFile('tests/fixtures/video.html','utf8');
+const silence=Buffer.alloc(44+120*8000*2);silence.write('RIFF');silence.writeUInt32LE(silence.length-8,4);silence.write('WAVEfmt ',8);silence.writeUInt32LE(16,16);silence.writeUInt16LE(1,20);silence.writeUInt16LE(1,22);silence.writeUInt32LE(8000,24);silence.writeUInt32LE(16000,28);silence.writeUInt16LE(2,32);silence.writeUInt16LE(16,34);silence.write('data',36);silence.writeUInt32LE(silence.length-44,40);
+const vtt='WEBVTT\n\n00:00.000 --> 00:05.000\nHello world.\n\n00:05.000 --> 00:10.000\nSecond subtitle.\n\n00:10.000 --> 00:15.000\nEnglish and 日本語 mixed.\n\n01:00.000 --> 01:05.000\nA late subtitle.\n';
 const dictionary={'Hello world.':'你好，世界。','English and 日本語 mixed.':'英语和日语混合。','This is the selected sentence.':'这是选中的句子。','Original content.':'原始内容。','New dynamic content.':'动态新增内容。','Updated by the website.':'网站更新了内容。','Read ':'阅读','documentation':'文档',' carefully.':'时请仔细。'};
 const server=http.createServer(async(req,res)=>{
+  if(req.url==='/silence.wav'){res.setHeader('Content-Type','audio/wav');res.setHeader('Accept-Ranges','bytes');const match=req.headers.range?.match(/bytes=(\d+)-(\d*)/);if(match){const start=Number(match[1]),end=match[2]?Math.min(Number(match[2]),silence.length-1):silence.length-1;res.writeHead(206,{'Content-Range':`bytes ${start}-${end}/${silence.length}`,'Content-Length':end-start+1});res.end(silence.subarray(start,end+1));}else res.end(silence);return;}
+  if(req.url==='/subtitles.vtt'){res.setHeader('Content-Type','text/vtt; charset=utf-8');res.end(vtt);return;}
   if(req.url==='/v1/chat/completions'){
     let body='';for await(const chunk of req)body+=chunk;const input=JSON.parse(body);const blocks=JSON.parse(input.messages[1].content).blocks;requests.push({input,blocks,at:Date.now()});
     if(delay)await new Promise(resolve=>setTimeout(resolve,delay));
     if(behavior==='auth'){res.writeHead(401);res.end('private diagnostic');return;}
     let segments=blocks.flatMap(b=>b.segments).map(s=>({id:s.id,text:dictionary[s.text]??(behavior==='html'?'<img src=x onerror="window.hacked=true">':'译：'+s.text)}));
     if(behavior==='invalid')segments=segments.slice(1);
-    const content=JSON.stringify({segments});
+    const truncated=behavior==='truncate'&&segments.length>6;
+    const content=truncated?'{"segments":[':JSON.stringify({segments});
     if(input.stream){res.writeHead(200,{'Content-Type':'text/event-stream','Cache-Control':'no-cache'});
       for(let i=0;i<content.length;i+=17){res.write(`data: ${JSON.stringify({choices:[{delta:{content:content.slice(i,i+17)}}]})}\n\n`);}
-      res.end('data: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50}}\n\ndata: [DONE]\n\n');
+      res.end(`data: ${JSON.stringify({choices:[{delta:{},finish_reason:truncated?'length':'stop'}]})}\n\ndata: {"choices":[],"usage":{"prompt_tokens":100,"completion_tokens":50}}\n\ndata: [DONE]\n\n`);
     }else{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{message:{content}}],usage:{prompt_tokens:100,completion_tokens:50}}));}
     return;
   }
-  res.setHeader('Content-Type','text/html; charset=utf-8');res.end(fixture);
+  res.setHeader('Content-Type','text/html; charset=utf-8');res.end(req.url?.startsWith('/video')?videoFixture:fixture);
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
@@ -116,6 +122,9 @@ try{
     await page.locator('#changing').evaluate(el=>{el.textContent='Updated by the website.';});await complete();await until(async()=>await page.locator('#changing').textContent()==='网站更新了内容。');
     await act('restore');assert.equal(await page.locator('#changing').textContent(),'Updated by the website.');delay=0;
   });
+  await step('Output truncation automatically subdivides without writing incomplete translations',async()=>{
+    await rpc('cache:clear');behavior='truncate';await act('start');await complete();assert.equal((await status()).failed,0);assert.equal(await page.locator('#plain').textContent(),'你好，世界。');await act('restore');behavior='normal';
+  });
   await step('Stop cancels requests and prevents later DOM writes',async()=>{
     await rpc('cache:clear');delay=700;const before=requests.length;await act('start');await until(()=>requests.length>before);await act('stop');await new Promise(resolve=>setTimeout(resolve,900));assert.equal((await status()).state,'stopped');assert.equal(await page.locator('#plain').textContent(),'Hello world.');await act('restore');delay=0;
   });
@@ -169,6 +178,64 @@ try{
     await cdp.send('HeapProfiler.collectGarbage');const after=await metrics();
     const data={loadedChars,sourceChars:(await status()).chars,durationMs,firstTranslationMs:Math.round(firstTranslationMs),baselineHeapBytes:Math.round(baseline.JSHeapUsedSize),translatedHeapBytes:Math.round(after.JSHeapUsedSize),heapDeltaBytes:Math.round(after.JSHeapUsedSize-baseline.JSHeapUsedSize),longTasks:tasks,maxLongTaskMs:Math.round(Math.max(0,...tasks)),requests:requests.length-before};
     await writeFile('artifacts/performance.json',JSON.stringify(data,null,2));assert.ok((await status()).limited);assert.ok((await status()).chars<=100000);assert.equal(tasks.length,0,'No added main-thread task over 50 ms');assert.ok(data.requests<=40,'Short paragraphs must be batched to control API overhead');await act('restore');await cdp.detach();
+  });
+  async function videoAct(action,bilingual=true){await activate();return rpc('video:action',{action,bilingual});}
+  async function captionText(){const session=await context.newCDPSession(page);try{const tree=await session.send('Accessibility.getFullAXTree');return tree.nodes.filter(n=>n.role?.value==='StaticText').map(n=>n.name?.value??'').join('\n');}finally{await session.detach();}}
+  await step('Video captions load only on click, prefetch native VTT and preserve subtitle modes',async()=>{
+    await page.goto(`${origin}/video`);await until(async()=>await page.locator('video').evaluate(v=>Number.isFinite(v.duration)));
+    const before=requests.length;await new Promise(resolve=>setTimeout(resolve,300));assert.equal(requests.length,before);
+    assert.equal(await page.evaluate(()=>!!globalThis.__siVideoTranslate),false);await activate();assert.equal((await rpc('video:status')).state,'idle');
+    await activate();await popup.reload();await popup.locator('#video-start').click();
+    await until(async()=> (await captionText()).includes('你好，世界。'));
+    const texts=requests.slice(before).flatMap(r=>r.blocks.flatMap(b=>b.segments.map(s=>s.text)));
+    assert.ok(texts.includes('Second subtitle.'));assert.ok(!texts.includes('A late subtitle.'));
+    assert.equal(await page.locator('video').evaluate(v=>v.textTracks[0].mode),'hidden');
+    await activate();await popup.reload();await until(async()=>await popup.locator('#video-start').textContent()==='重新开始');
+    await page.screenshot({path:'artifacts/video-bilingual.png'});
+  });
+  await step('Fullscreen containers preserve caption overlays and page translation does not stop the video session',async()=>{
+    await page.locator('#fullscreen').click();await until(async()=>await page.evaluate(()=>document.fullscreenElement?.id==='movie_player'));
+    await until(async()=>await page.locator('#movie_player [data-si-owned=video]').count()===1);
+    assert.ok((await captionText()).includes('你好，世界。'));
+    await page.evaluate(()=>document.exitFullscreen());await act('start');await complete();assert.equal((await rpc('video:status')).state,'active');await act('restore');
+  });
+  await step('Video caption seek, pause, speed, bilingual switch and replay cache stay synchronized',async()=>{
+    await page.locator('video').evaluate(async v=>{v.currentTime=4.8;await v.play();});await until(async()=>await page.locator('video').evaluate(v=>v.currentTime>=5.1));
+    await page.locator('video').evaluate(v=>v.pause());await until(async()=> (await captionText()).includes('译：Second subtitle.'));
+    await page.locator('video').evaluate(v=>v.currentTime=6);await until(async()=> (await captionText()).includes('译：Second subtitle.'));
+    await page.locator('video').evaluate(v=>{v.playbackRate=2;v.pause();});const stable=await captionText();await new Promise(resolve=>setTimeout(resolve,350));assert.equal(await captionText(),stable);
+    await videoAct('display',false);await until(async()=>!(await captionText()).split('\n').includes('Second subtitle.'));
+    const before=requests.length;await page.locator('video').evaluate(v=>v.currentTime=1);await until(async()=> (await captionText()).includes('你好，世界。'));assert.equal(requests.length,before);
+    await page.locator('video').evaluate(v=>v.currentTime=61);await until(async()=> (await captionText()).includes('译：A late subtitle.'));
+    assert.ok(!((await captionText()).includes('你好，世界。')));
+    await videoAct('stop');assert.equal(await page.locator('[data-si-owned=video]').count(),0);assert.equal(await page.locator('video').evaluate(v=>v.textTracks[0].mode),'disabled');
+    const stopped=requests.length;await new Promise(resolve=>setTimeout(resolve,350));assert.equal(requests.length,stopped);
+    await videoAct('start');await until(async()=> (await captionText()).includes('译：A late subtitle.'));assert.equal(requests.length,stopped);await videoAct('stop');
+  });
+  await step('Seeking and stopping drop late subtitle responses; failures retain readable source',async()=>{
+    await rpc('cache:clear');await page.locator('video').evaluate(v=>{v.playbackRate=1;v.currentTime=1;});delay=500;
+    const before=requests.length;await videoAct('start');await until(()=>requests.length>before);
+    await page.locator('video').evaluate(v=>v.currentTime=61);await until(async()=> (await captionText()).includes('译：A late subtitle.'));
+    assert.ok(!(await captionText()).includes('你好，世界。'));await videoAct('stop');delay=0;
+    await rpc('cache:clear');behavior='auth';await videoAct('start');await until(async()=> (await rpc('video:status')).message.includes('API Key'));
+    assert.ok((await captionText()).includes('A late subtitle.'));await new Promise(resolve=>setTimeout(resolve,1100));assert.match((await rpc('video:status')).message,/API Key/);behavior='normal';await videoAct('retry');await until(async()=> (await captionText()).includes('译：A late subtitle.'));await videoAct('stop');
+  });
+  await step('Unsupported videos explain missing captions and dynamic player removal releases overlays',async()=>{
+    await page.locator('video').evaluate(v=>v.querySelector('track').remove());const unsupported=await videoAct('start');assert.equal(unsupported.state,'error');assert.match(unsupported.message,/没有可读取的字幕/);assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+    await page.goto(`${origin}/video`);await until(async()=>await page.locator('video').evaluate(v=>Number.isFinite(v.duration)));await videoAct('start');await until(async()=>await page.locator('[data-si-owned=video]').count()===1);
+    await page.locator('video').evaluate(v=>v.remove());await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+  });
+  await step('YouTube visible-caption adapter translates caption changes and releases on SPA video switch',async()=>{
+    const html=videoFixture.replace('src="/silence.wav"',`src="${origin}/silence.wav"`).replace(/<track[^>]*>/,'');
+    await context.route('https://www.youtube.com/watch*',route=>route.fulfill({contentType:'text/html',body:html}));
+    await page.goto('https://www.youtube.com/watch?v=fixture');await activate();
+    const before=requests.length;await videoAct('start');assert.equal(requests.length,before);
+    await page.locator('.ytp-caption-segment').evaluate(e=>e.textContent='Hello world.');await until(async()=> (await captionText()).includes('你好，世界。'));
+    await act('start');await complete();assert.equal(await page.locator('.ytp-caption-segment').textContent(),'Hello world.');await act('restore');
+    await page.locator('.ytp-caption-segment').evaluate(e=>e.textContent='English and 日本語 mixed.');await until(async()=> (await captionText()).includes('英语和日语混合。'));
+    await page.locator('.ytp-caption-window-container').evaluate(e=>e.style.display='none');await until(async()=>await page.locator('[data-si-owned=video]').isHidden());
+    await page.evaluate(()=>history.pushState({},'','/watch?v=another'));await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+    await context.unroute('https://www.youtube.com/watch*');
   });
   assert.deepEqual(browserErrors,[]);await writeFile('artifacts/browser-tests.json',JSON.stringify({passed:results.length,tests:results},null,2));
   console.log(`${results.length} browser tests passed. Screenshots and performance report: artifacts/`);

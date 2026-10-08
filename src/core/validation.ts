@@ -29,7 +29,7 @@ export function validateSettings(value: unknown): asserts value is Settings {
 }
 export function validateInput(value: unknown): asserts value is TranslationInput {
   const x = value as TranslationInput;
-  if (!x || !['page','selection','test'].includes(x.kind) || !isTarget(x.target) ||
+  if (!x || !['page','selection','subtitle','test'].includes(x.kind) || !isTarget(x.target) ||
       !boundedString(x.requestId,100) || !x.requestId || !boundedString(x.taskId,100) || !x.taskId ||
       !boundedString(x.profileId,80) || !Array.isArray(x.blocks) || x.blocks.length < 1 || x.blocks.length > 64) throw new Error('翻译请求无效。');
   const ids = new Set<string>(); let chars = 0; let contextChars = 0;

@@ -8,6 +8,7 @@
   <section class="progress-card" aria-live="polite"><div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div><progress id="progress" value="0" max="1" aria-label="页面翻译进度"></progress><p id="detail">翻译当前页面，保留链接与格式。</p></section>
   <div class="row actions"><button class="secondary" id="stop" disabled>停止</button><button class="secondary" id="restore">恢复原文</button><button class="text-button" id="retry" hidden>重试失败部分</button></div>
   <p class="notice" id="error" role="alert" hidden></p>
+  <section class="video-help"><strong>视频字幕翻译</strong><p id="video-state" class="muted" aria-live="polite">有字幕的视频可开启翻译。</p><div class="row"><button class="secondary" id="video-start" disabled>正在读取字幕状态…</button><button class="text-button" id="video-stop" disabled>停止</button><button class="text-button" id="video-retry" hidden>重试</button></div><label class="video-check"><input type="checkbox" id="video-bilingual" checked> 同时显示原文</label></section>
   <div class="selection-help"><span class="small-icon" aria-hidden="true">⌁</span><div><strong>只想翻译一句？</strong><p>选中文字，再点击浮动的“译”按钮。</p><button class="text-button compact" id="grant-site" disabled>正在读取划词状态…</button></div></div>
   <footer><span>仅在你点击后发送文字</span><kbd>Alt ⇧ T</kbd></footer>
 </main><script type="module" src="/src/ui/popup.ts"></script></body></html>

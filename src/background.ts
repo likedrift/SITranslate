@@ -1,4 +1,4 @@
-import {DEFAULT_SETTINGS, EMPTY_STATUS, configFor, type Settings, type TranslationInput, type PageStatus, type TranslationResult} from './core/types';
+import {DEFAULT_SETTINGS, EMPTY_STATUS, EMPTY_VIDEO_STATUS, configFor, type Settings, type TranslationInput, type PageStatus, type TranslationResult} from './core/types';
 import {endpointFor,validateSettings,validateInput} from './core/validation';
 import {Scheduler} from './core/scheduler';
 import {adapterFor,ProviderError} from './core/provider';
@@ -52,7 +52,7 @@ async function tabAction(action:string,tabId?:number){
   const config=await safeConfig();
   if(action==='start'&&!config.ready)throw new Error('请先在设置中填写 API Key 和模型。');
   if(action==='start'||action==='retry'){
-    for(const [key,job] of jobs)if(job.tabId===tab.id && job.frameId===0 && !job.taskId.startsWith('selection-'))job.controller.abort();
+    for(const [key,job] of jobs)if(job.tabId===tab.id && job.frameId===0 && !job.taskId.startsWith('selection-')&&!job.taskId.startsWith('subtitle-'))job.controller.abort();
     const taskId=crypto.randomUUID();
     for(const key of taskBudget.keys())if(key.startsWith(`${tab.id}:0:`))taskBudget.delete(key);
     taskBudget.set(`${tab.id}:0:${taskId}`,{chars:0,limit:settings.maxPageChars});
@@ -86,7 +86,7 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
     if(!networkInput.blocks.length)return {segments:lookup!.segments,cached:true,usage:{input:0,output:0,estimatedCost:0}};
   const cachedKey=await cacheKey(profile,networkInput);
     await recordJob(key,'queued');
-    const shared=await sharedRequests.run(`${epoch}:${cachedKey}`,controller.signal,networkSignal=>scheduler.enqueue(input.kind==='page'?0:10,networkSignal,async()=>{
+    const shared=await sharedRequests.run(`${epoch}:${cachedKey}`,controller.signal,networkSignal=>scheduler.enqueue(input.kind==='page'?0:input.kind==='subtitle'?10:20,networkSignal,async()=>{
       await recordJob(key,'running');
       let lastProgress=0;
       const progress=(raw:string)=>{
@@ -116,8 +116,8 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
   finally{jobs.delete(key);}
 }
 let usageWrites=Promise.resolve();
-function updateUsage(next:{input:number;output:number;estimatedCost:number}){
-  usageWrites=usageWrites.catch(()=>{}).then(async()=>{const data=await chrome.storage.local.get('usage');const old=data.usage??{input:0,output:0,estimatedCost:0,requests:0};await chrome.storage.local.set({usage:{input:old.input+next.input,output:old.output+next.output,estimatedCost:old.estimatedCost+next.estimatedCost,requests:old.requests+1}});});return usageWrites;
+function updateUsage(next:TranslationResult['usage']){
+  usageWrites=usageWrites.catch(()=>{}).then(async()=>{const data=await chrome.storage.local.get('usage');const old=data.usage??{input:0,output:0,estimatedCost:0,requests:0};await chrome.storage.local.set({usage:{input:old.input+next.input,output:old.output+next.output,estimatedCost:old.estimatedCost+next.estimatedCost,requests:old.requests+(next.requests??1)}});});return usageWrites;
 }
 let selectionRegistration=Promise.resolve<string[]>([]);
 function registerSelection(){
@@ -167,6 +167,13 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
       const candidate={...settings,target:message.target,display:message.display,activeProfileId:message.profileId};validateSettings(candidate);settings=candidate;await chrome.storage.local.set({settings});return true;
     }
     case 'tab:action':return tabAction(message.action);
+    case 'video:action':{
+      if(!['start','stop','display','retry'].includes(message.action))throw new Error('不支持的视频操作。');
+      const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
+      const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
+      return chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
+    }
+    case 'video:status':{const tab=await activeTab();try{return await chrome.tabs.sendMessage(tab.id!,{type:'video:get-status'},{frameId:0})??EMPTY_VIDEO_STATUS;}catch{return EMPTY_VIDEO_STATUS;}}
     case 'tab:status':{const tab=await activeTab();try{return await chrome.tabs.sendMessage(tab.id!,{type:'page:get-status'},{frameId:0});}catch{const stored=await chrome.storage.session.get(`page:${tab.id}`);return {...EMPTY_STATUS,...stored[`page:${tab.id}`],state:'idle',message:''};}}
     case 'selection:origins':{const data=await chrome.storage.local.get('selectionOrigins');return data.selectionOrigins??[];}
     case 'selection:save':{
