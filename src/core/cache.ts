@@ -1,4 +1,4 @@
-import type { Profile, TranslationInput, TranslationResult } from './types';
+import type { Profile, TranslationInput, TranslationResult, Segment } from './types';
 export interface CacheEntry { key:string; texts:string[]; bytes:number; time:number }
 export class TranslationCache {
   private entries = new Map<string,CacheEntry>();
@@ -21,9 +21,24 @@ export class TranslationCache {
   clear(){this.entries.clear();this.bytes=0;}
   snapshot(){return [...this.entries.values()];}
   size(){return {bytes:this.bytes,entries:this.entries.size};}
+  async lookupBlocks(profile:Profile,input:TranslationInput) {
+    const keys=await Promise.all(input.blocks.map(block=>cacheKey(profile,{...input,blocks:[block]})));
+    const segments:Segment[]=[],missing:TranslationInput['blocks']=[];
+    input.blocks.forEach((block,i)=>{
+      const hit=this.get(keys[i],{...input,blocks:[block]});
+      if(hit)segments.push(...hit.segments);else missing.push(block);
+    });
+    return {keys,segments,missing};
+  }
+  putBlocks(keys:string[],input:TranslationInput,result:TranslationResult) {
+    const output=new Map(result.segments.map(segment=>[segment.id,segment.text]));
+    input.blocks.forEach((block,i)=>{
+      if(block.segments.every(segment=>output.has(segment.id)))this.put(keys[i],block.segments.map(segment=>output.get(segment.id)!));
+    });
+  }
 }
 export async function cacheKey(profile:Profile,input:TranslationInput) {
-  const value=JSON.stringify({version:1,profile:profile.id,endpoint:profile.baseUrl,model:profile.model,
+  const value=JSON.stringify({version:2,profile:profile.id,type:profile.type,endpoint:profile.baseUrl,model:profile.model,
     json:profile.jsonMode,thinking:profile.disableThinking,target:input.target,kind:input.kind,
     blocks:input.blocks.map(b=>({context:b.context,texts:b.segments.map(s=>s.text)}))});
   const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));

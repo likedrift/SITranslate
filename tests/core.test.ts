@@ -47,6 +47,31 @@ test('cache key includes model, target and context, remaps IDs, and evicts least
   assert.equal(c.get('one',{...input,blocks:[{id:'b',context:'',segments:[{id:'new',text:'source'}]}]})?.segments[0].id,'new');
   c.put('three',['third'.repeat(6)]);assert.ok(c.size().bytes<=110);assert.equal(c.get('two',input),undefined);
 });
+test('paragraph cache survives regrouping and reordering, while changed text and context miss',async()=>{
+  const profile=DEFAULT_SETTINGS.profiles[0],cache=new TranslationCache();
+  const first=await cache.lookupBlocks(profile,input);
+  cache.putBlocks(first.keys,input,{segments:input.blocks[0].segments.map(s=>({id:s.id,text:`translated ${s.text}`})),cached:false,usage:{input:1,output:1,estimatedCost:0}});
+  const old={...input.blocks[0],id:'new-block',segments:input.blocks[0].segments.map((s,i)=>({...s,id:`new-${i}`}))};
+  const added={id:'added',context:'New paragraph.',segments:[{id:'new-text',text:'New paragraph.'}]};
+  const next={...input,blocks:[added,old]};
+  const found=await cache.lookupBlocks(profile,next);
+  assert.deepEqual(found.missing,[added]);assert.deepEqual(found.segments.map(s=>s.id),old.segments.map(s=>s.id));
+  const changed={...old,segments:old.segments.map((s,i)=>i? s:{...s,text:'Changed text'})};
+  assert.equal((await cache.lookupBlocks(profile,{...input,blocks:[changed]})).missing.length,1);
+  assert.equal((await cache.lookupBlocks(profile,{...input,blocks:[{...old,context:'Changed meaning'}]})).missing.length,1);
+  assert.equal((await cache.lookupBlocks(profile,{...input,target:'ja',blocks:[old]})).missing.length,1);
+  assert.equal((await cache.lookupBlocks({...profile,model:'another'},input)).missing.length,1);
+  const restarted=new TranslationCache();restarted.load(cache.snapshot());
+  assert.equal((await restarted.lookupBlocks(profile,{...input,blocks:[old]})).missing.length,0);
+});
+test('only complete successful blocks enter the cache, preserving earlier successful translations',async()=>{
+  const profile=DEFAULT_SETTINGS.profiles[0],cache=new TranslationCache();
+  const second={id:'second',context:'',segments:[{id:'second-text',text:'Second paragraph'}]};
+  const combined={...input,blocks:[...input.blocks,second]},lookup=await cache.lookupBlocks(profile,combined);
+  cache.putBlocks(lookup.keys,combined,{segments:input.blocks[0].segments.map(s=>({id:s.id,text:'译文'})),cached:false,usage:{input:0,output:0,estimatedCost:0}});
+  const restored=await cache.lookupBlocks(profile,combined);assert.deepEqual(restored.missing,[second]);
+  cache.clear();assert.equal((await cache.lookupBlocks(profile,combined)).missing.length,2);
+});
 test('scheduler keeps bounded concurrency, prioritizes selections, and cancels queued work',async()=>{
   const scheduler=new Scheduler(1);const events:string[]=[];let release!:()=>void;
   const first=scheduler.enqueue(0,new AbortController().signal,()=>new Promise<string>(resolve=>{release=()=>resolve('first');events.push('first');}));

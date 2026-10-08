@@ -80,9 +80,11 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
     if(budget.chars+chars>budget.limit*2)throw new Error('已达到本页请求上限。请调整上限或重新开始。');
     budget.chars+=chars;await write({taskBudgets:Object.fromEntries(taskBudget)});
   }
-  const cachedKey=await cacheKey(profile,input);
   const epoch=cacheEpoch;
-    if(settings.cacheEnabled){const hit=cache.get(cachedKey,input);if(hit)return hit;}
+  const lookup=settings.cacheEnabled?await cache.lookupBlocks(profile,input):undefined;
+  const networkInput=lookup?{...input,blocks:lookup.missing}:input;
+    if(!networkInput.blocks.length)return {segments:lookup!.segments,cached:true,usage:{input:0,output:0,estimatedCost:0}};
+  const cachedKey=await cacheKey(profile,networkInput);
     await recordJob(key,'queued');
     const shared=await sharedRequests.run(`${epoch}:${cachedKey}`,controller.signal,networkSignal=>scheduler.enqueue(input.kind==='page'?0:10,networkSignal,async()=>{
       await recordJob(key,'running');
@@ -96,19 +98,20 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       };
       let result;
       for(let attempt=0;attempt<2;attempt++){
-        try{result=await adapterFor(profile).translate(profile,input,networkSignal,progress);break;}
+        try{result=await adapterFor(profile).translate(profile,networkInput,networkSignal,progress);break;}
         catch(error){if(attempt===0&&error instanceof ProviderError&&error.retryable){await new Promise<void>((resolve,reject)=>{const timeout=setTimeout(()=>{networkSignal.removeEventListener('abort',abort);resolve();},1500);const abort=()=>{clearTimeout(timeout);reject(new DOMException('已取消','AbortError'));};networkSignal.addEventListener('abort',abort,{once:true});if(networkSignal.aborted)abort();});continue;}throw error;}
       }
       if(!result)throw new Error('翻译失败。');
       if(networkSignal.aborted)throw new DOMException('已取消','AbortError');
-      if(settings.cacheEnabled&&epoch===cacheEpoch){cache.put(cachedKey,result.segments.map(s=>s.text));await write({translationCache:cache.snapshot()});}
+      if(settings.cacheEnabled&&epoch===cacheEpoch&&lookup){cache.putBlocks(lookup.keys,input,result);await write({translationCache:cache.snapshot()});}
       // The scheduler serializes this short update separately from long network calls.
       await updateUsage(result.usage);
       return result;
     }));
     await recordJob(key,'completed');
-    const ids=input.blocks.flatMap(b=>b.segments.map(s=>s.id));
-    return {...shared.value,segments:shared.value.segments.map((s,i)=>({id:ids[i],text:s.text})),usage:shared.shared?{input:0,output:0,estimatedCost:0}:shared.value.usage};
+    const ids=networkInput.blocks.flatMap(b=>b.segments.map(s=>s.id));
+    const output=new Map([...(lookup?.segments??[]),...shared.value.segments.map((s,i)=>({id:ids[i],text:s.text}))].map(s=>[s.id,s.text]));
+    return {...shared.value,segments:input.blocks.flatMap(b=>b.segments.map(s=>({id:s.id,text:output.get(s.id)!}))),usage:shared.shared?{input:0,output:0,estimatedCost:0}:shared.value.usage};
   }catch(error){await recordJob(key,controller.signal.aborted?'cancelled':'failed');throw error;}
   finally{jobs.delete(key);}
 }

@@ -129,6 +129,22 @@ try{
     await rpc('cache:clear');await act('start');await complete();await act('restore');const before=requests.length;await act('start');await complete();assert.equal(requests.length,before);
     const cached=await worker.evaluate(()=>chrome.storage.session.get('translationCache'));assert.ok(!JSON.stringify(cached).includes('test-key-not-a-real-secret'));await act('restore');
   });
+  await step('Restored pages reuse paragraphs after scrolling, reordering, additions and edits',async()=>{
+    const before=requests.length;
+    await page.evaluate(()=>{
+      const p=document.createElement('p');p.id='cache-added';p.textContent='A newly added cache paragraph.';document.body.prepend(p);
+      document.body.append(document.querySelector('#plain'));
+      document.querySelector('#changing').textContent='A changed cache paragraph.';
+      window.scrollTo(0,document.body.scrollHeight);
+    });
+    await act('start');await complete();
+    const texts=requests.slice(before).flatMap(r=>r.blocks.flatMap(b=>b.segments.map(s=>s.text)));
+    assert.deepEqual(texts.sort(),['A newly added cache paragraph.','A changed cache paragraph.'].sort());
+    assert.equal(await page.locator('#plain').textContent(),'你好，世界。');
+    assert.equal(await page.locator('#cache-added').textContent(),'译：A newly added cache paragraph.');
+    await act('restore');await page.evaluate(()=>window.scrollTo(0,0));
+    const repeat=requests.length;await act('start');await complete();assert.equal(requests.length,repeat);await act('restore');
+  });
   await step('Content script cannot read API configuration storage',async()=>{
     const result=await worker.evaluate(async(id)=>await chrome.scripting.executeScript({target:{tabId:id},func:async()=>{try{return await chrome.storage.local.get('settings');}catch{return 'denied';}}}),tabId);
     assert.ok(result[0].result==='denied'||!result[0].result.settings);
