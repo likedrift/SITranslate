@@ -1,5 +1,5 @@
 import {asrSession,isStreaming,speechUrl,type SpeechSettings,type SpeechUsage} from './speech';
-export type SpeechEvent={kind:'ready'|'failed'|'warning'|'finished'}|{kind:'usage';usage:SpeechUsage}|{kind:'transcript';itemId:string;text:string;preview:string;final:boolean;beginMs?:number;endMs?:number};
+export type SpeechEvent={kind:'ready'|'failed'|'warning'|'finished'}|{kind:'usage';usage:SpeechUsage}|{kind:'transcript';itemId:string;text:string;preview:string;final:boolean;beginMs?:number;endMs?:number;audioEndMs?:number};
 export interface SpeechProtocol {url:string;start:unknown;finish:unknown;audio:(pcm:Uint8Array)=>Uint8Array|Record<string,unknown>;parse:(data:any)=>SpeechEvent[]}
 const nonnegative=(n:unknown)=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0&&n<=1e12;
 function usage(value:any):SpeechEvent[]{if(!value||!nonnegative(value.input_tokens)||!nonnegative(value.output_tokens))return [];return [{kind:'usage',usage:{inputTokens:value.input_tokens,outputTokens:value.output_tokens,totalTokens:value.input_tokens+value.output_tokens}}];}
@@ -19,8 +19,8 @@ export function speechProtocol(s:SpeechSettings,taskId=crypto.randomUUID()):Spee
     const sentence=data.payload?.output?.sentence;if(!sentence||sentence.heartbeat===true||!nonnegative(sentence.sentence_id)||sentence.sentence_id<1||typeof sentence.text!=='string')return events;
     const final=sentence.sentence_end===true,full=sentence.text.slice(0,2000);
     // Intermediate snapshots can be revised. Only an explicitly fixed word prefix is safe to translate early.
-    let fixed='';if(!final&&Array.isArray(sentence.words)){for(const word of sentence.words.slice(0,500)){if(word?.fixed!==true||typeof word.text!=='string')break;fixed+=word.text+(typeof word.punctuation==='string'?word.punctuation:'');if(fixed.length>2000)break;}}
-    if(!full.startsWith(fixed))fixed='';const text=final?full:fixed,preview=final?'':full.slice(fixed.length);
-    events.push({kind:'transcript',itemId:`${taskId}:${sentence.sentence_id}`,text,preview,final,...(nonnegative(sentence.begin_time)?{beginMs:sentence.begin_time}:{}),...(nonnegative(sentence.end_time)&&sentence.end_time>=sentence.begin_time?{endMs:sentence.end_time}:{})});return events;
+    let fixed='',audioEndMs=final&&nonnegative(sentence.end_time)?sentence.end_time:undefined;if(!final&&Array.isArray(sentence.words)){for(const word of sentence.words.slice(0,500)){if(word?.fixed!==true||typeof word.text!=='string')break;fixed+=word.text+(typeof word.punctuation==='string'?word.punctuation:'');if(nonnegative(word.end_time))audioEndMs=word.end_time;if(fixed.length>2000)break;}}
+    if(!full.startsWith(fixed)){fixed='';audioEndMs=undefined;}const text=final?full:fixed,preview=final?'':full.slice(fixed.length);
+    events.push({kind:'transcript',itemId:`${taskId}:${sentence.sentence_id}`,text,preview,final,audioEndMs,...(nonnegative(sentence.begin_time)?{beginMs:sentence.begin_time}:{}),...(nonnegative(sentence.end_time)&&sentence.end_time>=sentence.begin_time?{endMs:sentence.end_time}:{})});return events;
   }};
 }

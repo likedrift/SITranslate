@@ -1,6 +1,7 @@
 import {EMPTY_VIDEO_STATUS,type PublicConfig,type TranslationResult,type VideoStatus} from './core/types';
 import {cueIndex,activeSubtitle,subtitleText,type SubtitleCue} from './core/subtitles';
 import {DEFAULT_CAPTION,captionBounds,captionPages,clamp,type CaptionLayout,type CaptionPosition} from './core/caption-layout';
+import {LiveReader} from './core/live-reader';
 
 // Loaded only after an explicit video action; ordinary pages do not load this module.
 const scope=globalThis as typeof globalThis&{__siVideoTranslate?:boolean};
@@ -15,6 +16,8 @@ function boot(){
   let youtube=false,videoId='',mediaSource='',captionText='',lastTime=0,lastSource='',lastError='';
   let captionChangedAt=0;
   let liveSession='',liveShownAt=0;
+  const reader=new LiveReader();let livePreview='',previousLine:HTMLDivElement|undefined,liveTools:HTMLDivElement|undefined,holdButton:HTMLButtonElement|undefined,liveHint:HTMLSpanElement|undefined;
+  const painted=new Set<string>();let paintScheduled=false;
   let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),card:HTMLDivElement|undefined,handle:HTMLButtonElement|undefined,pager:HTMLDivElement|undefined;
   let pageIndex=0,pageKey='',pageAt=0,pageCount=1,drag:{x:number;y:number;position:CaptionPosition;full:boolean}|undefined;
   const disposers:(()=>void)[]=[];
@@ -23,6 +26,7 @@ function boot(){
   function listen(target:EventTarget,event:string,fn:()=>void){target.addEventListener(event,fn);disposers.push(()=>target.removeEventListener(event,fn));}
   function stop(message='字幕翻译已停止。'){
     liveSession='';
+    reader.reset();painted.clear();livePreview='';previousLine=undefined;liveTools=undefined;paintScheduled=false;
     cancel();if(timer)clearInterval(timer);if(loadingTimer)clearTimeout(loadingTimer);timer=undefined;loadingTimer=undefined;
     for(const dispose of disposers.splice(0))dispose();
     if(track&&originalMode&&track.mode==='hidden')track.mode=originalMode;
@@ -36,8 +40,14 @@ function boot(){
   function overlay(){
     host=document.createElement('div');host.dataset.siOwned='video';host.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;';
     const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
+    for(const type of ['click','keydown','pointerdown'])shadow.addEventListener(type,e=>e.stopPropagation());
     style.textContent=':host{all:initial;pointer-events:none}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{box-sizing:border-box;font:600 22px/1.45 system-ui,sans-serif;text-align:center;color:#fff;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 3px #000;padding:8px 14px;border-radius:10px}.source{font-size:.78em;font-weight:400;opacity:.88}.target{margin-top:3px}.target:empty{display:none}button{pointer-events:auto;font:12px system-ui,sans-serif;color:#fff;background:#252a36e8;border:1px solid #ffffff40;border-radius:6px;padding:3px 9px;cursor:pointer}button:focus-visible{outline:2px solid #bdc6ff;outline-offset:2px}.handle{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);cursor:grab;touch-action:none;user-select:none;opacity:.55;white-space:nowrap}.handle:hover,.handle:focus-visible{opacity:1}.pages{font:12px system-ui,sans-serif;margin-top:4px;display:flex;align-items:center;justify-content:center;gap:10px}';
     card=document.createElement('div');card.className='caption';original=document.createElement('div');original.className='source';translated=document.createElement('div');translated.className='target';
+    previousLine=document.createElement('div');previousLine.style.cssText='font-size:.78em;font-weight:400;opacity:.72;margin-bottom:6px';previousLine.hidden=true;
+    liveTools=document.createElement('div');liveTools.className='pages';liveTools.hidden=true;
+    const back=document.createElement('button'),forward=document.createElement('button'),latestButton=document.createElement('button');holdButton=document.createElement('button');liveHint=document.createElement('span');
+    back.textContent='‹';back.setAttribute('aria-label','上一条译文');back.onclick=()=>{reader.back(Date.now());pageKey='';render();};forward.textContent='›';forward.setAttribute('aria-label','下一条译文');forward.onclick=()=>{reader.forward(Date.now());pageKey='';render();};
+    holdButton.onclick=()=>{reader.paused=!reader.paused;render();};latestButton.textContent='回到最新';latestButton.onclick=()=>{reader.latest(Date.now());pageKey='';render();};liveTools.append(back,holdButton,forward,latestButton,liveHint);
     handle=document.createElement('button');handle.className='handle';handle.textContent='⠿ 拖动字幕';handle.setAttribute('aria-label','拖动字幕位置，方向键可移动');
     pager=document.createElement('div');pager.className='pages';
     const previous=document.createElement('button'),next=document.createElement('button'),count=document.createElement('span');previous.textContent='‹';next.textContent='›';previous.setAttribute('aria-label','上一页字幕');next.setAttribute('aria-label','下一页字幕');
@@ -46,7 +56,7 @@ function boot(){
     handle.onpointermove=e=>{if(!drag||!host)return;e.preventDefault();const r=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),b=captionBounds(r,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,drag.full);layout[drag.full?'fullscreen':'normal']={x:clamp(drag.position.x+(e.clientX-drag.x)/Math.max(1,b.rangeX),0,1),y:clamp(drag.position.y+(e.clientY-drag.y)/Math.max(1,b.rangeY),0,1)};render();};
     const finish=()=>{if(!drag)return;const full=drag.full;drag=undefined;savePosition(full);};handle.onpointerup=finish;handle.onpointercancel=finish;
     handle.onkeydown=e=>{const moves:Record<string,[number,number]>={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};if(!moves[e.key]||layout.locked)return;e.preventDefault();e.stopPropagation();const full=!!document.fullscreenElement,key=full?'fullscreen':'normal',p=layout[key]??{x:.5,y:.85},d=e.shiftKey ? .08 : .02;layout[key]={x:clamp(p.x+moves[e.key][0]*d,0,1),y:clamp(p.y+moves[e.key][1]*d,0,1)};render();savePosition(full);};
-    card.append(original,translated,pager);shadow.append(style,handle,card);document.documentElement.append(host);
+    card.append(previousLine,original,translated,pager,liveTools);shadow.append(style,handle,card);document.documentElement.append(host);
     listen(window,'resize',render);
     const run=generation;void rpc<CaptionLayout>({type:'caption:get'}).then(s=>{if(run!==generation)return;layout=s;status.bilingual=s.showOriginal;render();}).catch(()=>{});
   }
@@ -55,19 +65,30 @@ function boot(){
     if(!host||!original||!translated||!card||!handle||!pager||(!video&&!liveSession))return;
     const full=document.fullscreenElement,parent=full&&video&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
-    const rect=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),source=current.map(c=>c.text).join('\n');
-    const texts=current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
+    if(liveSession)reader.tick(Date.now(),layout.readingMode??'balanced');
+    const active=reader.current,rect=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),source=liveSession?(active?.source??livePreview):current.map(c=>c.text).join('\n');
+    const texts=liveSession?(active?.text??''):current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
     const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(21,25,35,${layout.opacity})`;handle.hidden=layout.locked;
     const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*2),targets=captionPages(texts,limit),sources=captionPages(status.bilingual||!texts?source:'',Math.floor(limit/ .78));
-    pageCount=Math.max(targets.length,sources.length);const key=source+'\0'+texts+'\0'+limit;
+    pageCount=Math.max(targets.length,sources.length);const key=(liveSession?active?.id??'preview':source+'\0'+texts)+'\0'+limit;
     if(key!==pageKey){pageKey=key;pageIndex=0;pageAt=Date.now();}
-    if(!drag&&pageCount>1&&Date.now()-pageAt>Math.max(2500,Math.min(6000,limit*90))){pageIndex=(pageIndex+1)%pageCount;pageAt=Date.now();}
+    if(!drag&&(!liveSession||!reader.paused)&&pageCount>1&&Date.now()-pageAt>Math.max(2500,Math.min(6000,limit*90))){pageIndex=(pageIndex+1)%pageCount;pageAt=Date.now();}
     pageIndex=Math.min(pageIndex,pageCount-1);original.textContent=sources[Math.min(sources.length-1,Math.floor(pageIndex*sources.length/pageCount))];translated.textContent=targets[Math.min(targets.length-1,Math.floor(pageIndex*targets.length/pageCount))];
     pager.hidden=pageCount<=1;pager.children[1].textContent=`${pageIndex+1} / ${pageCount}`;
+    if(liveSession){
+      if(!reader.paused&&layout.showOriginal&&livePreview&&livePreview!==source)original.textContent='识别中：'+captionPages(livePreview,Math.floor(limit/.78)).at(-1);
+      const previous=reader.previous;previousLine!.hidden=!previous;previousLine!.textContent=previous?'上一条：'+captionPages(previous.text,limit).at(-1):'';
+      liveTools!.hidden=false;holdButton!.textContent=reader.paused?'继续字幕':'暂停字幕滚动';liveHint!.textContent=[active&&!active.final?'生成中':'',reader.paused?'已暂停':reader.pending?`待显示 ${reader.pending}`:''].filter(Boolean).join(' · ');
+    }
     const unsupported=full?.tagName==='VIDEO'||document.pictureInPictureElement===video;
     host.hidden=!source||(layout.mode==='video'&&(rect.bottom<0||rect.top>innerHeight||rect.width<40))||unsupported;
     if(unsupported)status.message='原生视频全屏和画中画暂不支持叠加字幕，请使用网页播放器全屏。';
     const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;
+    if(liveSession){for(const cue of reader.dropped.splice(0))if(cue.traceId)void rpc({type:'speech:paint',sessionId:liveSession,traceId:cue.traceId,skipped:true}).catch(()=>{});
+      if(active?.traceId&&!painted.has(active.traceId)&&!host.hidden&&!paintScheduled&&document.visibilityState==='visible'){
+        paintScheduled=true;const run=generation,cue=active;requestAnimationFrame(()=>requestAnimationFrame(()=>{paintScheduled=false;if(run!==generation||reader.current?.version!==cue.version||host?.hidden||document.visibilityState!=='visible')return;painted.add(cue.traceId!);if(painted.size>100)painted.delete(painted.values().next().value!);void rpc({type:'speech:paint',sessionId:liveSession,traceId:cue.traceId,at:Date.now(),arrivedAt:cue.arrivedAt,sourceEndAt:cue.sourceEndAt}).catch(()=>{});}));
+      }
+    }
   }
   function nativeCue(cue:TextTrackCue,index:number):SubtitleCue|undefined{
     if(!(cue instanceof VTTCue)||!track)return;
@@ -156,9 +177,12 @@ function boot(){
     if(m.type==='video:live-caption'){
       if(m.sessionId!==liveSession){respond(false);return;}
       if(m.stop){stop();respond(true);return;}
-      if(m.preview&&Date.now()-liveShownAt<8000){respond(true);return;}
+      if(m.resetProvisional){for(const cue of [...reader.items])if(!cue.final)reader.withdraw(cue.id,cue.version,Date.now());render();respond(true);return;}
+      if(m.preview){livePreview=String(m.source??'').slice(0,2000);render();respond(true);return;}
+      if(m.failed){reader.withdraw(String(m.pieceId??'live'),String(m.version??''),Date.now());render();respond(true);return;}
       const cue:SubtitleCue={id:'live',text:String(m.source??'').slice(0,2000),start:0,end:Infinity,context:''};current=[cue];entries.set('live',{cue,state:'done',text:m.preview?'':String(m.translation??'').slice(0,6000)});
-      if(!m.preview){liveShownAt=Date.now();status.completed++;}render();respond(true);return;
+      reader.receive({id:String(m.pieceId??'live'),version:String(m.version??''),source:cue.text,text:entries.get('live')?.text??'',final:!m.partial,traceId:m.traceId,sourceEndAt:m.sourceEndAt,arrivedAt:Date.now()},Date.now(),layout.readingMode??'balanced');
+      if(!m.partial){liveShownAt=Date.now();status.completed++;}render();respond(true);return;
     }
     if(m.type==='video:stop'){stop();respond(status);return;}
     if(m.type==='video:display'){status.bilingual=m.bilingual!==false;render();respond(status);return;}

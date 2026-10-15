@@ -1,10 +1,12 @@
 import {pcm16,type SpeechSettings,type SpeechUsage} from './core/speech';
 import {speechProtocol,type SpeechProtocol} from './core/speech-protocol';
+import {AudioClock} from './core/audio-clock';
 let stream:MediaStream|undefined,audio:AudioContext|undefined,monitor:AudioContext|undefined,socket:WebSocket|undefined,processor:AudioWorkletNode|undefined;
 let sessionId='',generation=0,timer:ReturnType<typeof setInterval>|undefined,connectTimer:ReturnType<typeof setTimeout>|undefined;
 let bytes=0,seconds=0,lastSound=0,ready=false,retries=0,settings:SpeechSettings,testing=false;
 let connectedAt=0;
 let protocol:SpeechProtocol|undefined,asrUsage:SpeechUsage|undefined;
+const audioClock=new AudioClock();
 const notify=(type:string,data:Record<string,unknown>={})=>chrome.runtime.sendMessage({type,sessionId,...data}).catch(()=>{});
 function send(value:unknown){if(socket?.readyState===WebSocket.OPEN)socket.send(JSON.stringify(value));}
 async function cleanup(){generation++;ready=false;if(timer)clearInterval(timer);if(connectTimer)clearTimeout(connectTimer);timer=undefined;connectTimer=undefined;
@@ -15,7 +17,7 @@ async function cleanup(){generation++;ready=false;if(timer)clearInterval(timer);
 }
 async function fail(message:string){void notify('speech:failed',{message});await cleanup();}
 function connect(run:number){
-  if(run!==generation)return;const adapter=speechProtocol(settings),usageBase={inputTokens:asrUsage?.inputTokens??0,outputTokens:asrUsage?.outputTokens??0};protocol=adapter;
+  if(run!==generation)return;const adapter=speechProtocol(settings),usageBase={inputTokens:asrUsage?.inputTokens??0,outputTokens:asrUsage?.outputTokens??0};protocol=adapter;audioClock.reset();
   const ws=new WebSocket(adapter.url);socket=ws;ready=false;
   connectTimer=setTimeout(()=>{if(run===generation)void fail('语音服务连接超时，请检查网络、地域、Key 和模型权限。');},12000);
   ws.onopen=()=>{if(run===generation&&socket===ws)ws.send(JSON.stringify(adapter.start));};
@@ -29,7 +31,7 @@ function connect(run:number){
       if(result.kind==='finished'){void fail('语音服务任务已结束，请点击开始重新连接。');return;}
       if(result.kind==='warning')void notify('speech:warning',{message:'一段语音识别失败，继续识别后续内容。'});
       if(result.kind==='usage'){const inputTokens=Math.max(asrUsage?.inputTokens??0,usageBase.inputTokens+result.usage.inputTokens),outputTokens=Math.max(asrUsage?.outputTokens??0,usageBase.outputTokens+result.usage.outputTokens);asrUsage={inputTokens,outputTokens,totalTokens:inputTokens+outputTokens};}
-      if(result.kind==='transcript'&&ready)void notify('speech:transcript',result);
+      if(result.kind==='transcript'&&ready){const receivedAt=Date.now(),sourceEndAt=result.audioEndMs===undefined?undefined:audioClock.endAt(result.audioEndMs);void notify('speech:transcript',{...result,receivedAt,sourceEndAt});}
     }
   };
   ws.onerror=()=>{};
@@ -54,7 +56,7 @@ async function start(m:any){
       processor.port.onmessage=event=>{if(run!==generation)return;const samples=event.data as Float32Array;seconds+=samples.length/16000;
         if(samples.some(v=>Math.abs(v)>0.002))lastSound=seconds;
         if(!ready||!socket)return;if(socket.bufferedAmount>256000){void fail('网络发送积压超过上限，已停止音频上传。请检查网络后重启。');return;}
-        const data=pcm16(samples),frame=protocol!.audio(data);if(frame instanceof Uint8Array)socket.send(frame as Uint8Array<ArrayBuffer>);else send(frame);bytes+=data.length;
+        const data=pcm16(samples),frame=protocol!.audio(data);audioClock.upload(samples.length);if(frame instanceof Uint8Array)socket.send(frame as Uint8Array<ArrayBuffer>);else send(frame);bytes+=data.length;
       };
       for(const track of stream.getTracks())track.onended=()=>{if(run===generation)void fail('标签页音频采集已结束，请重新开启。');};
     }catch{await fail('无法采集标签页声音。请重新加载扩展、刷新直播页，播放视频后从工具栏点击开始。');return;}

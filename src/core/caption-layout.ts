@@ -1,7 +1,8 @@
 export interface CaptionPosition {x:number;y:number}
-export interface CaptionLayout {fontSize:number;width:number;opacity:number;mode:'video'|'screen';locked:boolean;showOriginal:boolean;normal?:CaptionPosition;fullscreen?:CaptionPosition}
+export interface CaptionLayout {fontSize:number;width:number;opacity:number;mode:'video'|'screen';locked:boolean;showOriginal:boolean;readingMode?:'balanced'|'live';normal?:CaptionPosition;fullscreen?:CaptionPosition}
 export const DEFAULT_CAPTION:CaptionLayout={fontSize:22,width:68,opacity:.78,mode:'video',locked:false,showOriginal:true};
 export function validateCaption(s:CaptionLayout){
+  if(s?.readingMode!==undefined&&!['balanced','live'].includes(s.readingMode))throw new Error('字幕阅读模式无效。');
   if(!s||!Number.isFinite(s.fontSize)||s.fontSize<14||s.fontSize>40||!Number.isFinite(s.width)||s.width<35||s.width>95||!Number.isFinite(s.opacity)||s.opacity<.1||s.opacity>1||!['video','screen'].includes(s.mode)||typeof s.locked!=='boolean'||typeof s.showOriginal!=='boolean')throw new Error('字幕显示设置无效。');
   for(const p of [s.normal,s.fullscreen])if(p!==undefined&&(!p||!Number.isFinite(p.x)||!Number.isFinite(p.y)||p.x<0||p.x>1||p.y<0||p.y>1))throw new Error('字幕位置无效。');
 }

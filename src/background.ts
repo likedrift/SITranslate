@@ -1,4 +1,4 @@
-import {DEFAULT_SETTINGS, EMPTY_STATUS, EMPTY_VIDEO_STATUS, configFor, type Settings, type TranslationInput, type PageStatus, type TranslationResult} from './core/types';
+import {DEFAULT_SETTINGS, EMPTY_STATUS, EMPTY_VIDEO_STATUS, configFor, type Settings, type TranslationInput, type PageStatus, type TranslationResult,type TranslationObserver} from './core/types';
 import {endpointFor,validateSettings,validateInput} from './core/validation';
 import {Scheduler} from './core/scheduler';
 import {adapterFor,ProviderError} from './core/provider';
@@ -6,6 +6,7 @@ import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
 import {DEFAULT_CAPTION,validateCaption,type CaptionLayout} from './core/caption-layout';
+import {streamSegment} from './core/stream-text';
 
 const scheduler=new Scheduler(2),cache=new TranslationCache();
 const sharedRequests=new SharedWork<TranslationResult>();
@@ -35,7 +36,7 @@ const trusted=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime
 let captionWrites=Promise.resolve<unknown>(undefined);
 async function captionLayout():Promise<CaptionLayout>{const s=(await chrome.storage.local.get('captionLayout')).captionLayout;try{validateCaption(s);return s;}catch{return structuredClone(DEFAULT_CAPTION);}}
 function saveCaption(patch:Partial<CaptionLayout>,reset=false){const next=captionWrites.catch(()=>{}).then(async()=>{const s=reset?structuredClone(DEFAULT_CAPTION):{...await captionLayout(),...patch};validateCaption(s);await chrome.storage.local.set({captionLayout:s});const tabs=await chrome.tabs.query({});await Promise.all(tabs.filter(t=>t.id!==undefined&&/^https?:\/\//.test(t.url??'')).map(t=>chrome.tabs.sendMessage(t.id!,{type:'video:layout',layout:s},{frameId:0}).catch(()=>{})));return s;});captionWrites=next;return next;}
-const speech=createSpeechController({ready:initialized,config:safeConfig,translate:async(input,tabId)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url});},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
+const speech=createSpeechController({ready:initialized,config:safeConfig,translate:async(input,tabId,observer)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url},observer);},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
 const pageSender=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && sender.tab?.id!==undefined && /^https?:\/\//.test(sender.url??'');
 function errorText(error:unknown){return error instanceof Error?error.message:'操作失败，请重试。';}
 async function recordJob(key:string,state:string) {
@@ -67,7 +68,7 @@ async function tabAction(action:string,tabId?:number){
   }
   return chrome.tabs.sendMessage(tab.id,{type:`page:${action}`,display:settings.display},{frameId:0});
 }
-async function translate(input:TranslationInput,sender:chrome.runtime.MessageSender){
+async function translate(input:TranslationInput,sender:chrome.runtime.MessageSender,observer?:TranslationObserver){
   validateInput(input);const internal=trusted(sender);
   if(internal && input.kind!=='test')throw new Error('无效测试请求。');
   if(!internal && (!pageSender(sender) || input.kind==='test'))throw new Error('无效页面请求。');
@@ -92,10 +93,14 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
     if(!networkInput.blocks.length)return {segments:lookup!.segments,cached:true,usage:{input:0,output:0,estimatedCost:0}};
   const cachedKey=await cacheKey(profile,networkInput);
     await recordJob(key,'queued');
-    const shared=await sharedRequests.run(`${epoch}:${cachedKey}`,controller.signal,networkSignal=>scheduler.enqueue(input.kind==='page'?0:input.kind==='subtitle'?10:20,networkSignal,async()=>{
+    const shared=await sharedRequests.run(`${epoch}:${cachedKey}${observer?':'+input.requestId:''}`,controller.signal,networkSignal=>scheduler.enqueue(input.kind==='page'?0:input.kind==='subtitle'?10:20,networkSignal,async()=>{
       await recordJob(key,'running');
-      let lastProgress=0;
+      let lastProgress=0,firstToken=false,lastText='',pendingText='',progressTimer:ReturnType<typeof setTimeout>|undefined;observer?.start?.(profile.stream);
+      const clearProgress=()=>{if(progressTimer)clearTimeout(progressTimer);progressTimer=undefined;};
+      const flushProgress=()=>{clearProgress();if(networkSignal.aborted||!pendingText||pendingText===lastText)return;lastProgress=Date.now();lastText=pendingText;observer?.text?.(pendingText);};
+      networkSignal.addEventListener('abort',clearProgress,{once:true});
       const progress=(raw:string)=>{
+        if(observer&&!networkSignal.aborted){if(!firstToken&&raw){firstToken=true;observer.token?.();}const source=networkInput.blocks[0]?.segments[0];if(networkInput.blocks.length===1&&networkInput.blocks[0].segments.length===1&&source){const text=streamSegment(raw,source.id,Math.max(500,source.text.length*12));if(text&&text!==lastText){pendingText=text;const wait=80-(Date.now()-lastProgress);if(wait<=0)flushProgress();else if(!progressTimer)progressTimer=setTimeout(flushProgress,wait);}}return;}
         // A validated prefix is only for the one plain-text selection preview; final result is still fully validated.
         if(input.kind!=='selection'||!profile.stream||Date.now()-lastProgress<100)return;
         const match=raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);if(!match)return;
@@ -103,10 +108,10 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
         lastProgress=Date.now();chrome.tabs.sendMessage(tabId,{type:'selection:progress',requestId:input.requestId,text},{frameId}).catch(()=>{});
       };
       let result;
-      for(let attempt=0;attempt<2;attempt++){
+      try{for(let attempt=0;attempt<2;attempt++){
         try{result=await adapterFor(profile).translate(profile,networkInput,networkSignal,progress);break;}
         catch(error){if(attempt===0&&error instanceof ProviderError&&error.retryable){await new Promise<void>((resolve,reject)=>{const timeout=setTimeout(()=>{networkSignal.removeEventListener('abort',abort);resolve();},1500);const abort=()=>{clearTimeout(timeout);reject(new DOMException('已取消','AbortError'));};networkSignal.addEventListener('abort',abort,{once:true});if(networkSignal.aborted)abort();});continue;}throw error;}
-      }
+      }}finally{clearProgress();networkSignal.removeEventListener('abort',clearProgress);}
       if(!result)throw new Error('翻译失败。');
       if(networkSignal.aborted)throw new DOMException('已取消','AbortError');
       if(settings.cacheEnabled&&epoch===cacheEpoch&&lookup){cache.putBlocks(lookup.keys,input,result);await write({translationCache:cache.snapshot()});}
@@ -170,7 +175,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   }
   if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
   switch(message.type){
-    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];return saveCaption(patch);}
+    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal','readingMode'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];return saveCaption(patch);}
     case 'caption:reset':return saveCaption({},true);
     case 'settings:get':return settings;
     case 'settings:save':{

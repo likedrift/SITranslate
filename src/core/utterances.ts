@@ -1,4 +1,4 @@
-export interface SpeechPiece {id:string;order:number;text:string;final:boolean;at:number;context?:string}
+export interface SpeechPiece {id:string;order:number;text:string;final:boolean;at:number;context?:string;traceId?:string;sourceEndAt?:number}
 interface Item {text:string;final:boolean;lastAt:number;emitted:Map<number,string>;base:number}
 // All offsets are recomputed from the confirmed prefix. Draft suffixes never trigger translation.
 export class Utterances {
@@ -15,9 +15,9 @@ export class Utterances {
   private pieces(id:string,item:Item,now:number){
     const chars=Array.from(item.text),chunks:{text:string;complete:boolean}[]=[];let start=0;
     while(start<chars.length){let end=start,complete=false;
-      while(end<chars.length&&end-start<48){const c=chars[end++];if(/[。！？!?]/.test(c)||c==='.'&&(!chars[end]||/\s/.test(chars[end]))){while(end<chars.length&&end-start<48&&/[」』）”’]/.test(chars[end]))end++;complete=true;break;}}
+      while(end<chars.length&&end-start<36){const c=chars[end++];if(/[。！？!?]/.test(c)||c==='.'&&(!chars[end]||/\s/.test(chars[end]))){while(end<chars.length&&end-start<36&&/[」』）”’]/.test(chars[end]))end++;complete=true;break;}}
       if(!complete&&end<chars.length){let boundary=-1;for(let i=end;i>start+16;i--)if(/[、，,；;\s]/.test(chars[i-1])){boundary=i;break;}
-        if(boundary>start)end=boundary;else {while(end>start+36&&/[のをにがはとでへやも]/.test(chars[end-1]))end--;}
+        if(boundary>start)end=boundary;else {while(end>start+27&&/[のをにがはとでへやも]/.test(chars[end-1]))end--;}
         complete=true;
       }
       chunks.push({text:chars.slice(start,end).join('').trim(),complete});start=end;
@@ -27,7 +27,7 @@ export class Utterances {
       const c=chunks[i];if(!c.text||item.emitted.get(i)===c.text)continue;
       // Do not rewrite historical chunks when a final ASR revision changes earlier words.
       if(i<Math.max(-1,...item.emitted.keys()))continue;
-      if(!item.final&&!c.complete&&(c.text.length<12||now-item.lastAt<2000))continue;
+      if(!item.final&&!c.complete&&(c.text.length<12||now-item.lastAt<800))continue;
       result.push({id:`${id}:${i}`,order:item.base+i,text:c.text,final:item.final||c.complete,at:now,context:chunks.slice(0,i).map(c=>c.text).join('').slice(-400)});item.emitted.set(i,c.text);
     }
     if(result.length)item.lastAt=now;

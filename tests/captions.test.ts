@@ -23,9 +23,9 @@ test('Growing utterance translates completed prefixes once and emits only the ne
   assert.deepEqual(u.update('one','今日は晴れです。次に番組を紹介します。',true,300),[]);
   assert.deepEqual(u.update('one','古い途中結果',false,400),[]);
 });
-test('Long unpunctuated Japanese is bounded and idle confirmed tails flush after two seconds',()=>{
+test('Long unpunctuated Japanese is bounded and confirmed tails flush after 800 ms',()=>{
   const u=new Utterances(),text='あいうえおかきくけこ'.repeat(13),a=u.update('one',text,false,0);assert.ok(a.length>=2);assert.ok(a.every(p=>Array.from(p.text).length<=48));
-  assert.deepEqual(u.flush(1999),[]);const b=u.flush(2000);assert.equal(a.map(p=>p.text).join('')+b.map(p=>p.text).join(''),text);assert.deepEqual(u.flush(3000),[]);
+  assert.deepEqual(u.flush(799),[]);const b=u.flush(800);assert.equal(a.map(p=>p.text).join('')+b.map(p=>p.text).join(''),text);assert.deepEqual(u.flush(3000),[]);
 });
 test('Pending corrections replace the same piece, retain newest three, and preserve distinct identical utterances',()=>{
   const p=(id:string,order:number,text=id):SpeechPiece=>({id,order,text,final:true,at:0});let queue:SpeechPiece[]=[];

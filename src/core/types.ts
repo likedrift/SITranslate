@@ -28,6 +28,7 @@ export interface TranslationInput {
 export interface TranslationResult {
   segments: Segment[]; cached: boolean; usage: { input: number; output: number; estimatedCost: number; requests?:number };
 }
+export interface TranslationObserver {start?:(streaming:boolean)=>void;token?:()=>void;text?:(text:string)=>void}
 export interface PageStatus {
   state: 'idle' | 'scanning' | 'translating' | 'watching' | 'done' | 'stopped';
   total: number; completed: number; failed: number; chars: number;
