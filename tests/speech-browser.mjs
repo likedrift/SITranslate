@@ -5,9 +5,9 @@ import {generateKeyPairSync,createHash} from 'node:crypto';
 import {mkdir,cp,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {mockASR} from './fixtures/mock-asr.mjs';
-const results=[],requests=[];
+const results=[],requests=[];let translationDelay=0;
 const server=http.createServer(async(req,res)=>{
-  if(req.url==='/v1/chat/completions'){let raw='';for await(const c of req)raw+=c;const input=JSON.parse(raw),blocks=JSON.parse(input.messages[1].content).blocks;requests.push(blocks);res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({segments:blocks.flatMap(b=>b.segments.map(s=>({id:s.id,text:s.text==='皆さん、こんにちは。'?'大家好。':'这是直播中文字幕。'})))})}}],usage:{prompt_tokens:10,completion_tokens:10}}));return;}
+  if(req.url==='/v1/chat/completions'){let raw='';for await(const c of req)raw+=c;const input=JSON.parse(raw),blocks=JSON.parse(input.messages[1].content).blocks;requests.push(blocks);if(translationDelay)await new Promise(r=>setTimeout(r,translationDelay));res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({segments:blocks.flatMap(b=>b.segments.map(s=>({id:s.id,text:s.text==='皆さん、こんにちは。'?'大家好。':s.text.startsWith('検証')?'译：'+s.text:'这是直播中文字幕。'})))})}}],usage:{prompt_tokens:10,completion_tokens:10}}));return;}
   res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Live audio fixture</h1><video style="width:720px;height:405px;background:#202438"></video><button id="tone">Play audio</button><script>document.querySelector("#tone").onclick=async()=>{window.audio=new AudioContext();const osc=audio.createOscillator(),gain=audio.createGain();gain.gain.value=.05;osc.connect(gain);gain.connect(audio.destination);osc.start();await audio.resume();};</script></body></html>');
 });
 const mock=mockASR(server);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`,ws=origin.replace('http:','ws:')+'/api-ws/v1/realtime';
@@ -46,6 +46,26 @@ try{
   });
   await step('Stop releases capture, offscreen document, auth rule and overlay',async()=>{
     await rpc('speech:stop');const before=mock.stats.frames;await new Promise(resolve=>setTimeout(resolve,400));assert.equal(mock.stats.frames,before);assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+  });
+  await step('Growing confirmed sentences are deduplicated, pending revisions coalesce, and stale responses do not replace captions',async()=>{
+    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0);translationDelay=650;
+    const before=requests.length,completed=(await rpc('speech:status')).completed;
+    const emit=text=>mock.emit({type:'conversation.item.input_audio_transcription.text',item_id:'coalesce',text,stash:'未確認の語'});
+    emit('検証の最初の文です。');await until(()=>requests.length>before);emit('検証の訂正の文です。');emit('検証の最新の文です。');
+    mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'coalesce',transcript:'検証の最新の文です。'});
+    await until(async()=> (await rpc('speech:status')).lastTranslation==='译：検証の最新の文です。');
+    assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証の最初の文です。','検証の最新の文です。']);assert.equal((await rpc('speech:status')).completed,completed+1);
+    const next=requests.length;mock.emit({type:'conversation.item.input_audio_transcription.text',item_id:'prefix',text:'検証の前半です。',stash:'まだ翻訳しない'});await until(()=>requests.length>next);
+    mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'prefix',transcript:'検証の前半です。検証の後半です。'});await until(async()=> (await rpc('speech:status')).lastTranslation==='译：検証の後半です。');
+    assert.deepEqual(requests.slice(next).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証の前半です。','検証の後半です。']);assert.ok(!requests[next][0].context.includes('前半'));assert.ok(requests[next+1][0].context.includes('前半'));
+    await activate();await popup.reload();await until(async()=>await popup.locator('#speech-timing').isVisible());assert.match(await popup.locator('#speech-timing').textContent(),/识别文本确认后/);
+    translationDelay=0;await rpc('speech:stop');
+  });
+  await step('Slow translation keeps only the latest three pending sentences instead of accumulating a live backlog',async()=>{
+    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0);translationDelay=1000;const before=requests.length;
+    const emit=n=>mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'bounded-'+n,transcript:`検証待機${n}。`});emit(1);await until(()=>requests.length>before);
+    for(let n=2;n<=6;n++){emit(n);await new Promise(r=>setTimeout(r,25));}
+    await until(async()=> (await rpc('speech:status')).lastTranslation==='译：検証待機6。');assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証待機1。','検証待機4。','検証待機5。','検証待機6。']);translationDelay=0;await rpc('speech:stop');
   });
   await step('Worker restart keeps the capture session and restores its translation configuration',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');

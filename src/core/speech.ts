@@ -1,5 +1,5 @@
 export interface SpeechSettings {endpoint:string;apiKey:string;model:string;language:'ja'|'en'|'zh'|'auto';context:string}
-export interface SpeechStatus {state:'idle'|'connecting'|'active'|'stopped'|'error';sessionId:string;tabId:number;message:string;seconds:number;sentBytes:number;hasAudio:boolean;completed:number;lastSource:string;lastTranslation:string}
+export interface SpeechStatus {state:'idle'|'connecting'|'active'|'stopped'|'error';sessionId:string;tabId:number;message:string;seconds:number;sentBytes:number;hasAudio:boolean;completed:number;lastSource:string;lastTranslation:string;timing?:{queueMs:number;translationMs:number;textToCaptionMs:number}}
 export const DEFAULT_SPEECH:SpeechSettings={endpoint:'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',apiKey:'',model:'qwen3-asr-flash-realtime',language:'ja',context:''};
 export const IDLE_SPEECH:SpeechStatus={state:'idle',sessionId:'',tabId:-1,message:'无需网站字幕，直接识别当前标签页声音。',seconds:0,sentBytes:0,hasAudio:false,completed:0,lastSource:'',lastTranslation:''};
 export function speechEndpoint(value:string){

@@ -181,6 +181,8 @@ try{
   });
   async function videoAct(action,bilingual=true){await activate();return rpc('video:action',{action,bilingual});}
   async function captionText(){const session=await context.newCDPSession(page);try{const tree=await session.send('Accessibility.getFullAXTree');return tree.nodes.filter(n=>n.role?.value==='StaticText').map(n=>n.name?.value??'').join('\n');}finally{await session.detach();}}
+  async function captionButton(name){const session=await context.newCDPSession(page);try{const tree=await session.send('Accessibility.getFullAXTree'),node=tree.nodes.find(n=>n.role?.value==='button'&&n.name?.value===name);if(!node)return;const {model}=await session.send('DOM.getBoxModel',{backendNodeId:node.backendDOMNodeId});return {x:(model.content[0]+model.content[2])/2,y:(model.content[1]+model.content[5])/2};}finally{await session.detach();}}
+  const captionHandle=()=>captionButton('拖动字幕位置，方向键可移动');
   await step('Video captions load only on click, prefetch native VTT and preserve subtitle modes',async()=>{
     await page.goto(`${origin}/video`);await until(async()=>await page.locator('video').evaluate(v=>Number.isFinite(v.duration)));
     const before=requests.length;await new Promise(resolve=>setTimeout(resolve,300));assert.equal(requests.length,before);
@@ -198,6 +200,17 @@ try{
     await until(async()=>await page.locator('#movie_player [data-si-owned=video]').count()===1);
     assert.ok((await captionText()).includes('你好，世界。'));
     await page.evaluate(()=>document.exitFullscreen());await act('start');await complete();assert.equal((await rpc('video:status')).state,'active');await act('restore');
+  });
+  await step('Caption dragging persists across timers and restart, fullscreen positions are independent, and layout changes send no model requests',async()=>{
+    const before=requests.length,initial=await page.locator('[data-si-owned=video]').boundingBox(),handle=await captionHandle();assert.ok(handle);
+    await page.mouse.move(handle.x,handle.y);await page.mouse.down();await page.mouse.move(handle.x+45,handle.y-80,{steps:6});await page.mouse.up();
+    await until(async()=>!!(await rpc('caption:get')).normal);const moved=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(moved.y<initial.y-40);assert.ok(moved.x>initial.x+20);
+    await new Promise(r=>setTimeout(r,500));const stable=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(Math.abs(stable.y-moved.y)<2);
+    await videoAct('stop');await videoAct('start');await until(async()=> (await captionText()).includes('你好，世界。'));const reopened=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(Math.abs(reopened.y-moved.y)<2);
+    const normal=(await rpc('caption:get')).normal;await page.locator('#fullscreen').click();await until(async()=>!!await page.evaluate(()=>document.fullscreenElement));const fullHandle=await captionHandle();await page.mouse.move(fullHandle.x,fullHandle.y);await page.mouse.down();await page.mouse.move(fullHandle.x-30,fullHandle.y-35,{steps:4});await page.mouse.up();await until(async()=>!!(await rpc('caption:get')).fullscreen);assert.deepEqual((await rpc('caption:get')).normal,normal);await page.evaluate(()=>document.exitFullscreen());
+    await rpc('caption:save',{patch:{locked:true,fontSize:28,width:80,opacity:.5,mode:'screen'}});await until(async()=>!await captionHandle());await activate();await popup.reload();await popup.locator('details summary').click();assert.equal(await popup.locator('#caption-font').inputValue(),'28');assert.ok(await popup.locator('#caption-lock').isChecked());
+    await popup.locator('#caption-reset').click();await until(async()=>!(await rpc('caption:get')).normal);assert.ok(!(await rpc('caption:get')).locked);await until(async()=>!!await captionHandle());assert.equal(requests.length,before);
+    await page.screenshot({path:'artifacts/video-layout.png'});
   });
   await step('Video caption seek, pause, speed, bilingual switch and replay cache stay synchronized',async()=>{
     await page.locator('video').evaluate(async v=>{v.currentTime=4.8;await v.play();});await until(async()=>await page.locator('video').evaluate(v=>v.currentTime>=5.1));
@@ -219,6 +232,15 @@ try{
     assert.ok(!(await captionText()).includes('你好，世界。'));await videoAct('stop');delay=0;
     await rpc('cache:clear');behavior='auth';await videoAct('start');await until(async()=> (await rpc('video:status')).message.includes('API Key'));
     assert.ok((await captionText()).includes('A late subtitle.'));await new Promise(resolve=>setTimeout(resolve,1100));assert.match((await rpc('video:status')).message,/API Key/);behavior='normal';await videoAct('retry');await until(async()=> (await captionText()).includes('译：A late subtitle.'));await videoAct('stop');
+  });
+  await step('Long captions remain readable through page controls and viewport changes instead of silent clipping',async()=>{
+    const before=requests.length;await rpc('caption:save',{patch:{mode:'screen',fontSize:40,width:35}});
+    const send=data=>worker.evaluate(async({id,data})=>chrome.tabs.sendMessage(id,data),{id:tabId,data});
+    await send({type:'video:live-start',sessionId:'layout-test'});await send({type:'video:live-caption',sessionId:'layout-test',source:'日本語の長い説明。'.repeat(10),translation:'这是需要完整显示的较长字幕。'.repeat(8)+'结尾标记'});
+    await until(async()=>!!await captionButton('下一页字幕'));let sawEnd=false;
+    for(let i=0;i<20;i++){if((await captionText()).includes('结尾标记')){sawEnd=true;break;}const next=await captionButton('下一页字幕');await page.mouse.click(next.x,next.y);}
+    assert.ok(sawEnd);await page.setViewportSize({width:640,height:480});await until(async()=>{const bounds=await page.locator('[data-si-owned=video]').boundingBox();return bounds.x>=0&&bounds.x+bounds.width<=640&&bounds.y>=0&&bounds.y+bounds.height<=480;});
+    await page.screenshot({path:'artifacts/video-long-caption.png'});await page.setViewportSize({width:1280,height:900});await send({type:'video:stop'});await rpc('caption:reset');assert.equal(requests.length,before);
   });
   await step('Unsupported videos explain missing captions and dynamic player removal releases overlays',async()=>{
     await page.locator('video').evaluate(v=>v.querySelector('track').remove());const unsupported=await videoAct('start');assert.equal(unsupported.state,'error');assert.match(unsupported.message,/没有可读取的字幕/);assert.equal(await page.locator('[data-si-owned=video]').count(),0);

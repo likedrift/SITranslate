@@ -1,5 +1,6 @@
 import {EMPTY_VIDEO_STATUS,type PublicConfig,type TranslationResult,type VideoStatus} from './core/types';
 import {cueIndex,activeSubtitle,subtitleText,type SubtitleCue} from './core/subtitles';
+import {DEFAULT_CAPTION,captionBounds,captionPages,clamp,type CaptionLayout,type CaptionPosition} from './core/caption-layout';
 
 // Loaded only after an explicit video action; ordinary pages do not load this module.
 const scope=globalThis as typeof globalThis&{__siVideoTranslate?:boolean};
@@ -14,6 +15,8 @@ function boot(){
   let youtube=false,videoId='',mediaSource='',captionText='',lastTime=0,lastSource='',lastError='';
   let captionChangedAt=0;
   let liveSession='',liveShownAt=0;
+  let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),card:HTMLDivElement|undefined,handle:HTMLButtonElement|undefined,pager:HTMLDivElement|undefined;
+  let pageIndex=0,pageKey='',pageAt=0,pageCount=1,drag:{x:number;y:number;position:CaptionPosition;full:boolean}|undefined;
   const disposers:(()=>void)[]=[];
   async function rpc<T=unknown>(value:unknown):Promise<T>{const r=await chrome.runtime.sendMessage(value);if(!r?.ok)throw new Error(r?.error??'扩展连接中断。');return r.data;}
   function cancel(){if(task)void rpc({type:'task:cancel',taskId:task}).catch(()=>{});task=`subtitle-${crypto.randomUUID()}`;generation++;working=false;for(const e of entries.values())if(e.state==='running')e.state='pending';}
@@ -23,7 +26,7 @@ function boot(){
     cancel();if(timer)clearInterval(timer);if(loadingTimer)clearTimeout(loadingTimer);timer=undefined;loadingTimer=undefined;
     for(const dispose of disposers.splice(0))dispose();
     if(track&&originalMode&&track.mode==='hidden')track.mode=originalMode;
-    host?.remove();host=undefined;original=undefined;translated=undefined;video=undefined;track=undefined;entries.clear();current=[];
+    host?.remove();host=undefined;original=undefined;translated=undefined;card=undefined;handle=undefined;pager=undefined;drag=undefined;pageKey='';video=undefined;track=undefined;entries.clear();current=[];
     lastError='';status={...status,state:'stopped',message};
   }
   function findVideo(){
@@ -33,23 +36,38 @@ function boot(){
   function overlay(){
     host=document.createElement('div');host.dataset.siOwned='video';host.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;';
     const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
-    style.textContent=':host{all:initial;pointer-events:none}:host([hidden]){display:none!important}.caption{font:600 clamp(15px,2vw,24px)/1.45 system-ui,sans-serif;text-align:center;color:#fff;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 3px #000;padding:6px 14px;background:#151923db;border-radius:10px;max-height:150px;overflow:hidden}.source{font-size:.78em;font-weight:400;opacity:.88}.target{margin-top:3px}.target:empty{display:none}';
-    const card=document.createElement('div');card.className='caption';original=document.createElement('div');original.className='source';translated=document.createElement('div');translated.className='target';
-    card.append(original,translated);shadow.append(style,card);document.documentElement.append(host);
+    style.textContent=':host{all:initial;pointer-events:none}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{box-sizing:border-box;font:600 22px/1.45 system-ui,sans-serif;text-align:center;color:#fff;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 3px #000;padding:8px 14px;border-radius:10px}.source{font-size:.78em;font-weight:400;opacity:.88}.target{margin-top:3px}.target:empty{display:none}button{pointer-events:auto;font:12px system-ui,sans-serif;color:#fff;background:#252a36e8;border:1px solid #ffffff40;border-radius:6px;padding:3px 9px;cursor:pointer}button:focus-visible{outline:2px solid #bdc6ff;outline-offset:2px}.handle{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);cursor:grab;touch-action:none;user-select:none;opacity:.55;white-space:nowrap}.handle:hover,.handle:focus-visible{opacity:1}.pages{font:12px system-ui,sans-serif;margin-top:4px;display:flex;align-items:center;justify-content:center;gap:10px}';
+    card=document.createElement('div');card.className='caption';original=document.createElement('div');original.className='source';translated=document.createElement('div');translated.className='target';
+    handle=document.createElement('button');handle.className='handle';handle.textContent='⠿ 拖动字幕';handle.setAttribute('aria-label','拖动字幕位置，方向键可移动');
+    pager=document.createElement('div');pager.className='pages';
+    const previous=document.createElement('button'),next=document.createElement('button'),count=document.createElement('span');previous.textContent='‹';next.textContent='›';previous.setAttribute('aria-label','上一页字幕');next.setAttribute('aria-label','下一页字幕');
+    const turn=(delta:number)=>{pageIndex=(pageIndex+delta+pageCount)%pageCount;pageAt=Date.now();render();};previous.onclick=()=>turn(-1);next.onclick=()=>turn(1);pager.append(previous,count,next);
+    handle.onpointerdown=e=>{if(layout.locked||e.button!==0)return;e.preventDefault();e.stopPropagation();const full=!!document.fullscreenElement;drag={x:e.clientX,y:e.clientY,position:{...((full?layout.fullscreen:layout.normal)??{x:.5,y:.85})},full};handle!.setPointerCapture(e.pointerId);};
+    handle.onpointermove=e=>{if(!drag||!host)return;e.preventDefault();const r=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),b=captionBounds(r,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,drag.full);layout[drag.full?'fullscreen':'normal']={x:clamp(drag.position.x+(e.clientX-drag.x)/Math.max(1,b.rangeX),0,1),y:clamp(drag.position.y+(e.clientY-drag.y)/Math.max(1,b.rangeY),0,1)};render();};
+    const finish=()=>{if(!drag)return;const full=drag.full;drag=undefined;savePosition(full);};handle.onpointerup=finish;handle.onpointercancel=finish;
+    handle.onkeydown=e=>{const moves:Record<string,[number,number]>={ArrowLeft:[-1,0],ArrowRight:[1,0],ArrowUp:[0,-1],ArrowDown:[0,1]};if(!moves[e.key]||layout.locked)return;e.preventDefault();e.stopPropagation();const full=!!document.fullscreenElement,key=full?'fullscreen':'normal',p=layout[key]??{x:.5,y:.85},d=e.shiftKey ? .08 : .02;layout[key]={x:clamp(p.x+moves[e.key][0]*d,0,1),y:clamp(p.y+moves[e.key][1]*d,0,1)};render();savePosition(full);};
+    card.append(original,translated,pager);shadow.append(style,handle,card);document.documentElement.append(host);
+    listen(window,'resize',render);
+    const run=generation;void rpc<CaptionLayout>({type:'caption:get'}).then(s=>{if(run!==generation)return;layout=s;status.bilingual=s.showOriginal;render();}).catch(()=>{});
   }
+  function savePosition(full:boolean){void rpc({type:'caption:position',context:full?'fullscreen':'normal',position:layout[full?'fullscreen':'normal']}).catch(()=>{});}
   function render(){
-    if(!host||!original||!translated||(!video&&!liveSession))return;
+    if(!host||!original||!translated||!card||!handle||!pager||(!video&&!liveSession))return;
     const full=document.fullscreenElement,parent=full&&video&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
     const rect=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),source=current.map(c=>c.text).join('\n');
     const texts=current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
-    // Source remains readable while translation is in progress or has failed.
-    original.textContent=status.bilingual||!texts?source:'';translated.textContent=texts;
+    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(21,25,35,${layout.opacity})`;handle.hidden=layout.locked;
+    const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*2),targets=captionPages(texts,limit),sources=captionPages(status.bilingual||!texts?source:'',Math.floor(limit/ .78));
+    pageCount=Math.max(targets.length,sources.length);const key=source+'\0'+texts+'\0'+limit;
+    if(key!==pageKey){pageKey=key;pageIndex=0;pageAt=Date.now();}
+    if(!drag&&pageCount>1&&Date.now()-pageAt>Math.max(2500,Math.min(6000,limit*90))){pageIndex=(pageIndex+1)%pageCount;pageAt=Date.now();}
+    pageIndex=Math.min(pageIndex,pageCount-1);original.textContent=sources[Math.min(sources.length-1,Math.floor(pageIndex*sources.length/pageCount))];translated.textContent=targets[Math.min(targets.length-1,Math.floor(pageIndex*targets.length/pageCount))];
+    pager.hidden=pageCount<=1;pager.children[1].textContent=`${pageIndex+1} / ${pageCount}`;
     const unsupported=full?.tagName==='VIDEO'||document.pictureInPictureElement===video;
-    host.hidden=!source||rect.bottom<0||rect.top>innerHeight||rect.width<40||unsupported;
+    host.hidden=!source||(layout.mode==='video'&&(rect.bottom<0||rect.top>innerHeight||rect.width<40))||unsupported;
     if(unsupported)status.message='原生视频全屏和画中画暂不支持叠加字幕，请使用网页播放器全屏。';
-    host.style.left=`${Math.max(8,rect.left+rect.width*.08)}px`;host.style.width=`${Math.min(innerWidth-16,rect.width*.84)}px`;
-    host.style.top=`${Math.max(8,rect.bottom-Math.max(60,rect.height*.12)-host.getBoundingClientRect().height)}px`;
+    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;
   }
   function nativeCue(cue:TextTrackCue,index:number):SubtitleCue|undefined{
     if(!(cue instanceof VTTCue)||!track)return;
@@ -127,9 +145,10 @@ function boot(){
   }
   chrome.runtime.onMessage.addListener((m,sender,respond)=>{
     if(sender.id!==chrome.runtime.id||!m?.type?.startsWith('video:'))return;
+    if(m.type==='video:layout'){if(!drag){layout=m.layout;status.bilingual=layout.showOriginal;render();}respond(true);return;}
     if(m.type==='video:get-status'){respond(status);return;}
     if(m.type==='video:live-start'){
-      stop();liveSession=m.sessionId;video=findVideo();status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:true};overlay();
+      stop();liveSession=m.sessionId;liveShownAt=0;video=findVideo();status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:true};overlay();
       const end=()=>{void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});};
       if(video){listen(video,'seeking',end);listen(video,'emptied',end);}listen(document,'fullscreenchange',render);
       timer=setInterval(()=>{if(video&&!video.isConnected){end();stop();return;}render();},250);render();respond(true);return;

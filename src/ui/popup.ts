@@ -1,6 +1,7 @@
 import {type Settings,type PageStatus,type VideoStatus} from '../core/types';
 import {rpc,el,value,languageOptions,sitePattern} from './client';
 import type {SpeechStatus} from '../core/speech';
+import type {CaptionLayout} from '../core/caption-layout';
 let settings:Settings;let busy=false;let currentTab:chrome.tabs.Tab|undefined;
 async function refreshSelection(){
   const state=await rpc<{enabled:boolean;supported:boolean}>('selection:state',{url:currentTab?.url??''});
@@ -25,7 +26,6 @@ function paintVideo(s:VideoStatus){
   el<HTMLButtonElement>('video-stop').disabled=!['loading','active'].includes(s.state);
   el('video-retry').hidden=s.state!=='active'||s.source==='标签页音频';el<HTMLButtonElement>('video-start').disabled=s.state==='loading';
   el('video-start').textContent=s.state==='active'?'重新开始':'翻译视频字幕';
-  el<HTMLInputElement>('video-bilingual').checked=s.bilingual;
 }
 async function refreshVideo(){try{paintVideo(await rpc<VideoStatus>('video:status'));}catch{ /* Restricted pages retain the start action's explicit error. */ }}
 async function videoAction(action:string){try{error('');await preferences();paintVideo(await rpc<VideoStatus>('video:action',{action,bilingual:el<HTMLInputElement>('video-bilingual').checked}));}catch(err){error(err instanceof Error?err.message:'无法操作视频字幕。');}}
@@ -58,14 +58,20 @@ async function init(){
   await refresh();
   await refreshSelection();
   await refreshVideo();
+  paintCaption(await rpc<CaptionLayout>('caption:get'));
 }
-chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Object.keys(changes).some(key=>key.startsWith('page:')))void refresh();if(area==='local'&&changes.selectionOrigins)void refreshSelection().catch(err=>error(err.message));});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Object.keys(changes).some(key=>key.startsWith('page:')))void refresh();if(area==='local'&&changes.selectionOrigins)void refreshSelection().catch(err=>error(err.message));if(area==='local'&&changes.captionLayout)paintCaption(changes.captionLayout.newValue);});
 chrome.permissions.onAdded.addListener(()=>void refreshSelection().catch(()=>{}));
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection().catch(()=>{}));
 void init().catch(err=>error(err.message));
 setInterval(()=>void refreshVideo(),1000);
-async function refreshSpeech(){try{const s=await rpc<SpeechStatus>('speech:status');el('speech-state').textContent=s.message+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';}catch{}}
+async function refreshSpeech(){try{const s=await rpc<SpeechStatus>('speech:status');el('speech-state').textContent=s.message+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
 el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
 el('speech-stop').addEventListener('click',()=>void rpc('speech:stop').then(refreshSpeech).catch(e=>error(e.message)));
 el('speech-settings').addEventListener('click',()=>void chrome.tabs.create({url:chrome.runtime.getURL('options.html#speech')}));
 void refreshSpeech();setInterval(()=>void refreshSpeech(),1000);
+function paintCaption(s:CaptionLayout){if(!s)return;for(const [id,n,unit] of [['font',s.fontSize,'px'],['width',s.width,'%'],['opacity',Math.round(s.opacity*100),'%']] as const){if(document.activeElement!==el(`caption-${id}`))el<HTMLInputElement>(`caption-${id}`).value=String(n);el(`caption-${id}-label`).textContent=n+unit;}el<HTMLSelectElement>('caption-mode').value=s.mode;el<HTMLInputElement>('caption-lock').checked=s.locked;el<HTMLInputElement>('video-bilingual').checked=s.showOriginal;}
+for(const [id,key] of [['font','fontSize'],['width','width'],['opacity','opacity']] as const){const input=el<HTMLInputElement>(`caption-${id}`);input.addEventListener('input',()=>{el(`caption-${id}-label`).textContent=input.value+(id==='font'?'px':'%');});input.addEventListener('change',()=>void rpc('caption:save',{patch:{[key]:Number(input.value)/(id==='opacity'?100:1)}}).catch(e=>error(e.message)));}
+el('caption-mode').addEventListener('change',()=>void rpc('caption:save',{patch:{mode:value('caption-mode')}}).catch(e=>error(e.message)));
+el('caption-lock').addEventListener('change',()=>void rpc('caption:save',{patch:{locked:el<HTMLInputElement>('caption-lock').checked}}).catch(e=>error(e.message)));
+el('caption-reset').addEventListener('click',()=>void rpc<CaptionLayout>('caption:reset').then(paintCaption).catch(e=>error(e.message)));
