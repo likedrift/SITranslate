@@ -212,6 +212,33 @@ try{
     await popup.locator('#caption-reset').click();await until(async()=>!(await rpc('caption:get')).normal);assert.ok(!(await rpc('caption:get')).locked);await until(async()=>!!await captionHandle());assert.equal(requests.length,before);
     await page.screenshot({path:'artifacts/video-layout.png'});
   });
+  await step('Dragging the caption body and all four resize corners persist geometry, preserve opposite anchors, cancel safely and respect locking',async()=>{
+    const before=requests.length,box=()=>page.locator('[data-si-owned=video]').boundingBox();
+    await rpc('caption:save',{patch:{mode:'screen'}});
+    await page.evaluate(()=>{globalThis.captionPageClicks=0;document.body.addEventListener('click',()=>globalThis.captionPageClicks++);});
+    const initial=await box(),point={x:initial.x+initial.width/2,y:initial.y+initial.height/2};
+    await page.mouse.move(point.x,point.y);await page.mouse.down();await page.mouse.move(point.x-45,point.y-45,{steps:5});await page.mouse.up();
+    await until(async()=>!!(await rpc('caption:get')).normal);let moved=await box();assert.ok(Math.abs(moved.x-initial.x+45)<2&&Math.abs(moved.y-initial.y+45)<2);
+    for(const [label,west,north] of [['左上角',true,true],['右上角',false,true],['左下角',true,false],['右下角',false,false]]){
+      const old=await box(),grip=await captionButton(label+'缩放字幕');assert.ok(grip);
+      await page.mouse.move(grip.x,grip.y);await page.mouse.down();await page.mouse.move(grip.x+(west?-30:30),grip.y+(north?-20:20),{steps:5});await page.mouse.up();
+      await until(async()=>{const b=await box();return b.width>old.width+25&&b.height>old.height+15;});
+      const b=await box();assert.ok(Math.abs((west?b.x+b.width:b.x)-(west?old.x+old.width:old.x))<2);assert.ok(Math.abs((north?b.y+b.height:b.y)-(north?old.y+old.height:old.y))<2);
+      await until(async()=>!!(await rpc('caption:get')).normalSize);
+    }
+    await new Promise(r=>setTimeout(r,300));const resized=await box(),normal=await rpc('caption:get');assert.ok(normal.normalSize);
+    assert.equal(await page.evaluate(()=>globalThis.captionPageClicks),0);
+    const grip=await captionButton('左上角缩放字幕');await page.mouse.move(grip.x,grip.y);await page.mouse.down();await page.mouse.move(grip.x-35,grip.y-30);await page.keyboard.press('Escape');await page.mouse.up();
+    assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);const cancelled=await box();assert.ok(Math.abs(cancelled.width-resized.width)<2&&Math.abs(cancelled.y-resized.y)<2);
+    await videoAct('stop');await videoAct('start');await until(async()=> (await captionText()).includes('你好，世界。'));moved=await box();assert.ok(Math.abs(moved.width-resized.width)<2&&Math.abs(moved.height-resized.height)<2&&Math.abs(moved.y-resized.y)<2);
+    await page.locator('#fullscreen').click();await until(async()=>!!await page.evaluate(()=>document.fullscreenElement));const fullGrip=await captionButton('左上角缩放字幕');await page.mouse.move(fullGrip.x,fullGrip.y);await page.mouse.down();await page.mouse.move(fullGrip.x-20,fullGrip.y-15,{steps:3});await page.mouse.up();
+    await until(async()=>!!(await rpc('caption:get')).fullscreenSize);assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);await page.evaluate(()=>document.exitFullscreen());
+    await rpc('caption:save',{patch:{locked:true}});await until(async()=>!await captionButton('左上角缩放字幕'));assert.ok(!await captionHandle());assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);
+    await rpc('caption:save',{patch:{locked:false}});await until(async()=>!!await captionButton('右下角缩放字幕'));await page.screenshot({path:'artifacts/video-resize.png'});
+    await rpc('caption:save',{patch:{opacity:.6}});assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);
+    await rpc('caption:save',{patch:{width:75}});assert.equal((await rpc('caption:get')).normalSize,undefined);assert.equal((await rpc('caption:get')).fullscreenSize,undefined);
+    await rpc('caption:reset');assert.equal(requests.length,before);
+  });
   await step('Video caption seek, pause, speed, bilingual switch and replay cache stay synchronized',async()=>{
     await page.locator('video').evaluate(async v=>{v.currentTime=4.8;await v.play();});await until(async()=>await page.locator('video').evaluate(v=>v.currentTime>=5.1));
     await page.locator('video').evaluate(v=>v.pause());await until(async()=> (await captionText()).includes('译：Second subtitle.'));

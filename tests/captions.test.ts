@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {DEFAULT_CAPTION,validateCaption,captionBounds,captionPages} from '../src/core/caption-layout.ts';
+import {DEFAULT_CAPTION,validateCaption,captionBounds,captionPages,resizeCaptionBox,type CaptionCorner} from '../src/core/caption-layout.ts';
 import {Utterances,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
 test('Caption settings validate ranges and independent fullscreen positions',()=>{
   validateCaption({...DEFAULT_CAPTION,normal:{x:0,y:1},fullscreen:{x:1,y:0}});
@@ -15,6 +15,27 @@ test('Caption positions remain within anchor and scale with fullscreen and viewp
 test('Long caption pagination preserves all Unicode characters and bounds each page',()=>{
   const text='日本語の説明です。'.repeat(20)+'😀これは最後です。',pages=captionPages(text,36);
   assert.equal(pages.join(''),text);assert.ok(pages.length>1);assert.ok(pages.every(p=>Array.from(p).length<=36));
+});
+
+test('All resize corners keep the opposite corner pinned and clamp to minimum content and area bounds',()=>{
+  const box={left:150,top:150,width:400,height:120},area={left:20,top:40,width:800,height:500};
+  for(const corner of ['nw','ne','sw','se'] as CaptionCorner[]){
+    const west=corner.includes('w'),north=corner.includes('n');
+    const grown=resizeCaptionBox(box,area,corner,west?-70:70,north?-60:60,240,70);
+    assert.equal(grown.width,470);assert.equal(grown.height,180);
+    assert.equal(west?grown.left+grown.width:grown.left,west?550:150);assert.equal(north?grown.top+grown.height:grown.top,north?270:150);
+    const small=resizeCaptionBox(box,area,corner,west?10000:-10000,north?10000:-10000,240,70);assert.equal(small.width,240);assert.equal(small.height,70);
+    const large=resizeCaptionBox(box,area,corner,west?-10000:10000,north?-10000:10000,240,70);
+    assert.ok(large.left>=area.left&&large.top>=area.top);assert.ok(large.left+large.width<=820&&large.top+large.height<=540);
+  }
+});
+
+test('Manual dimensions scale within bounds, fullscreen size stays independent, and invalid dimensions are rejected',()=>{
+  const s={...DEFAULT_CAPTION,mode:'screen' as const,normalSize:{width:.5,height:.3},fullscreenSize:{width:.8,height:.6}};
+  validateCaption(s);const rect={left:0,top:0,right:1000,bottom:600,width:1000,height:600};
+  const normal=captionBounds(rect,1000,600,s,100),full=captionBounds(rect,1000,600,s,100,true),small=captionBounds(rect,600,400,s,100);
+  assert.equal(normal.width,984*.5);assert.equal(normal.height,560*.3);assert.equal(full.width,984*.8);assert.ok(small.width<normal.width&&small.height<normal.height);
+  for(const size of [null,{width:NaN,height:.5},{width:.5,height:0},{width:1.1,height:.5},{width:.5,height:Infinity}])assert.throws(()=>validateCaption({...s,normalSize:size} as any));
 });
 test('Growing utterance translates completed prefixes once and emits only the new sentence',()=>{
   const u=new Utterances();assert.deepEqual(u.update('one','今日は',false,0),[]);

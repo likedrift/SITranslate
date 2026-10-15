@@ -74,9 +74,9 @@ ASR 使用 ja 默认语言、pcm/16000、server_vad/0.2/600 ms，支持 corpus �
 
 最近一段的 queueMs、translationMs 和 textToCaptionMs 随现有 session 状态保存，没有上传诊断信息。它们从片段提交开始测量，不是 ASR 或真实音频端到端延迟。界面显示排队与翻译两个时间。
 
-`core/caption-layout.ts` 提供有界布局和 Unicode 分页。只有按需 video.js 导入，普通 content.js 体积不变。字幕自身保持 pointer-events:none，仅拖动手柄和翻页按钮接收交互；拖动使用 Pointer Events 和 pointer capture，结束后保存相对位置，键盘方向键也可调整。普通/网页全屏位置独立，视频范围或屏幕范围约束位置；现有定时器刷新时复用相对坐标，不覆盖手动位置。长字幕分页替代固定高度裁剪，新字幕优先，保留分页导航。
+`core/caption-layout.ts` 提供有界布局和 Unicode 分页。只有按需 video.js 导入，普通 content.js 体积不变。0.7.0 支持主体拖动及四角缩放：未锁定字幕卡接收 Pointer Events，交互按钮不启动拖动；锁定时主体恢复 pointer-events:none，功能按钮仍可点击。pointer capture 保持连续手势，3 px 阈值过滤误触，结束后一次保存；Esc、pointercancel、视口/全屏切换恢复手势前快照。保留手柄和方向键，四角也可键盘调整。普通/网页全屏位置和尺寸独立，尺寸是范围内比例；缩放固定对角、限制在视频或页面范围，最小高度由内容决定，设置的高度作为 min-height 留白，内容仍换行分页而不裁剪。不增轮询或网络请求。
 
-`captionLayout` 是独立 local 项，由后台校验并串行合并写入，拖动仅更新对应位置；外观写入只允许字体、宽度、透明度、范围、锁定和双语字段，避免弹窗旧快照覆盖位置。广播更新已加载的字幕模块，不触发翻译或清缓存。不变更旧模型/语音配置格式，旧版忽略新字段，支持同目录覆盖文件后回退。
+`captionLayout` 是独立 local 项，由后台校验并串行合并写入。页面 `caption:geometry` 只更新对应上下文的位置与尺寸；外观写入白名单避免弹窗旧快照覆盖布局。宽度滑块清除 normalSize/fullscreenSize 回到旧百分比布局，其余外观更新保留尺寸。手势中暂存广播，锁定立即中止手势；结束后后台合并最新其他设置再广播。不变更旧模型/语音配置格式，旧版忽略新尺寸字段，支持同目录覆盖文件后回退。
 
 ## 双模型 ASR 协议（0.5.0）
 

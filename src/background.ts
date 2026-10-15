@@ -159,6 +159,10 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     if(!['normal','fullscreen'].includes(message.context))throw new Error('字幕位置类型无效。');
     return saveCaption({[message.context]:message.position});
   }
+  if(message.type==='caption:geometry'&&pageSender(sender)){
+    if(!['normal','fullscreen'].includes(message.context))throw new Error('字幕位置类型无效。');
+    return saveCaption({[message.context]:message.position,[message.context+'Size']:message.size});
+  }
   if(message.type==='selection:state'&&(ui||pageSender(sender)))return selectionState(ui?String(message.url??''):sender.url!);
   if(message.type==='translate')return translate(message.input,sender);
   if(message.type==='page:config'&&pageSender(sender))return safeConfig();
@@ -175,7 +179,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   }
   if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
   switch(message.type){
-    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal','readingMode'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];return saveCaption(patch);}
+    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal','readingMode'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];if('width' in patch){patch.normalSize=undefined;patch.fullscreenSize=undefined;}return saveCaption(patch);}
     case 'caption:reset':return saveCaption({},true);
     case 'settings:get':return settings;
     case 'settings:save':{
