@@ -17,17 +17,19 @@ const server=http.createServer(async(req,res)=>{
     }
     res.setHeader('Content-Type','application/json');res.end(JSON.stringify({choices:[{message:{content:JSON.stringify({segments})}}],usage:{prompt_tokens:10,completion_tokens:10}}));return;
   }
-  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Live audio fixture</h1><video style="width:720px;height:405px;background:#202438"></video><button id="tone">Play audio</button><script>document.querySelector("#tone").onclick=async()=>{window.audio=new AudioContext();const osc=audio.createOscillator(),gain=audio.createGain();gain.gain.value=.05;osc.connect(gain);gain.connect(audio.destination);osc.start();await audio.resume();};</script></body></html>');
+  // Keep the capture clock running with digital silence. No oscillator or audible test source.
+  res.setHeader('Content-Type','text/html');res.end('<!doctype html><html><head><meta charset="utf-8"></head><body><h1>Silent capture fixture</h1><video style="width:720px;height:405px;background:#202438"></video><button id="silent-audio">Start silent fixture</button><script>document.querySelector("#silent-audio").onclick=async()=>{window.audio=new AudioContext();const source=audio.createConstantSource();source.offset.value=0;source.connect(audio.destination);source.start();await audio.resume();};</script></body></html>');
 });
 const mock=mockASR(server);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`,ws=origin.replace('http:','ws:')+'/api-ws/v1/realtime';
 await mkdir('artifacts',{recursive:true});const extension=path.resolve('artifacts/speech-extension');await cp('dist',extension,{recursive:true});
 const {publicKey}=generateKeyPairSync('rsa',{modulusLength:2048}),der=publicKey.export({type:'spki',format:'der'}),id=createHash('sha256').update(der).digest('hex').slice(0,32).replace(/[0-9a-f]/g,c=>String.fromCharCode(97+parseInt(c,16)));
 const manifest=JSON.parse(await readFile(path.join(extension,'manifest.json'),'utf8'));manifest.key=der.toString('base64');await writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
 // Chromium allowlist supplies the toolbar invocation grant in this isolated automated profile only.
-const context=await chromium.launchPersistentContext(path.resolve('artifacts',`speech-profile-${Date.now()}`),{channel:'chromium',headless:true,ignoreDefaultArgs:['--mute-audio'],args:[`--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`,'--autoplay-policy=no-user-gesture-required']});
+// Mute this isolated browser, including the offscreen playback monitor. Never unmute for a test.
+const context=await chromium.launchPersistentContext(path.resolve('artifacts',`speech-profile-${Date.now()}`),{channel:'chromium',headless:true,args:['--mute-audio',`--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`,'--autoplay-policy=no-user-gesture-required']});
 const errors=[];context.on('page',p=>p.on('pageerror',e=>errors.push(e.message)));
 let worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');assert.equal(new URL(worker.url()).host,id);
-const ui=await context.newPage();await ui.goto(`chrome-extension://${id}/options.html`);const page=await context.newPage();await page.goto(origin);await page.locator('#tone').click();const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
+const ui=await context.newPage();await ui.goto(`chrome-extension://${id}/options.html`);const page=await context.newPage();await page.goto(origin);await page.locator('#silent-audio').click();const popup=await context.newPage();await popup.goto(`chrome-extension://${id}/popup.html`);
 const tabId=await worker.evaluate(async url=>(await chrome.tabs.query({url:url+'/*'}))[0].id,origin);
 const rpc=(type,extra={})=>ui.evaluate(async({type,extra})=>{const r=await chrome.runtime.sendMessage({type,...extra});if(!r?.ok)throw new Error(r?.error??'No response');return r.data;},{type,extra});
 const activate=()=>worker.evaluate(id=>chrome.tabs.update(id,{active:true}),tabId);
@@ -36,6 +38,18 @@ async function step(name,fn){await fn();results.push({name,passed:true});console
 async function captionTexts(){const cdp=await context.newCDPSession(page);try{return (await cdp.send('Accessibility.getFullAXTree')).nodes.filter(n=>n.role?.value==='StaticText').map(n=>n.name?.value??'');}finally{await cdp.detach();}}
 async function captionClick(name){const cdp=await context.newCDPSession(page);try{const node=(await cdp.send('Accessibility.getFullAXTree')).nodes.find(n=>n.role?.value==='button'&&n.name?.value===name);assert.ok(node,'Missing caption control: '+name);const {model}=await cdp.send('DOM.getBoxModel',{backendNodeId:node.backendDOMNodeId});await page.mouse.click((model.content[0]+model.content[2])/2,(model.content[1]+model.content[5])/2);}finally{await cdp.detach();}}
 try{
+  await step('Offline AudioWorklet resamples and mixes nonzero stereo into 100 ms mono frames without any audio device',async()=>{
+    const result=await ui.evaluate(async()=>{
+      // OfflineAudioContext never opens a speaker. Exercise the built production worklet.
+      const offline=new OfflineAudioContext(1,3200,16000);await offline.audioWorklet.addModule(chrome.runtime.getURL('audio-worklet.js'));
+      const source=offline.createBufferSource(),buffer=offline.createBuffer(2,9600,48000);buffer.getChannelData(0).fill(.25);buffer.getChannelData(1).fill(.75);source.buffer=buffer;
+      const processor=new AudioWorkletNode(offline,'si-pcm'),frames=[];
+      let deadline;const received=new Promise((resolve,reject)=>{deadline=setTimeout(()=>reject(new Error('Offline worklet did not produce two frames')),5000);processor.port.onmessage=e=>{frames.push(e.data);if(frames.length===2)resolve();};});
+      try{source.connect(processor);processor.connect(offline.destination);source.start();const rendered=await offline.startRendering();await received;return {lengths:frames.map(f=>f.length),nonzero:frames.every(f=>f.some(v=>v>.4)),mixed:frames[0][800],silent:rendered.getChannelData(0).every(v=>v===0)};}
+      finally{clearTimeout(deadline);processor.port.onmessage=null;processor.disconnect();source.disconnect();}
+    });
+    assert.deepEqual(result.lengths,[1600,1600]);assert.ok(result.nonzero);assert.ok(Math.abs(result.mixed-.5)<.001);assert.ok(result.silent);
+  });
   await step('Configure independent speech settings via UI without starting capture',async()=>{
     await ui.locator('#speech-key').fill('test-speech-key');await ui.locator('#speech-endpoint').fill(ws);await ui.locator('#speech-language').selectOption('ja');await ui.locator('#speech-save').click();await until(async()=>await ui.locator('#speech-feedback').textContent()==='语音配置已保存。');
     const s=await rpc('settings:get');s.profiles[0]={...s.profiles[0],type:'compatible',baseUrl:origin+'/v1',apiKey:'test-text-key',model:'mock',stream:false};await rpc('settings:save',{settings:s});
@@ -45,8 +59,8 @@ try{
     await rpc('speech:test');await until(async()=> {const s=await rpc('speech:status');if(s.state==='error')throw new Error(s.message);return s.state==='stopped';});assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.config.input_audio_transcription.language,'ja');assert.equal(mock.stats.frames,0);
     assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
   });
-  await step('Actual tabCapture and AudioWorklet send nonzero PCM16 and translate Japanese without site captions',async()=>{
-    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0&&mock.stats.nonzero);const s=await rpc('speech:status');assert.equal(s.state,'active');assert.equal(s.lastTranslation,'大家好。');assert.ok(mock.stats.nonzero);assert.ok(mock.stats.audioBytes>3200);assert.equal(mock.stats.config.sample_rate,16000);
+  await step('Muted tabCapture and AudioWorklet send silent PCM16 frames and translate mock Japanese without site captions',async()=>{
+    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0&&mock.stats.audioBytes>3200);const s=await rpc('speech:status');assert.equal(s.state,'active');assert.equal(s.lastTranslation,'大家好。');assert.equal(mock.stats.nonzero,false);assert.equal(mock.stats.config.sample_rate,16000);
     assert.equal((await worker.evaluate(()=>chrome.tabCapture.getCapturedTabs()))[0].status,'active');assert.ok(requests.some(b=>b[0].segments[0].text==='皆さん、こんにちは。'));
     await page.screenshot({path:'artifacts/live-audio.png'});
   });
@@ -91,7 +105,7 @@ try{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');await page.reload();await until(async()=> (await rpc('speech:status')).state==='stopped');assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
   });
   await step('Provider error stops recording and clears credentials and exposes a useful message',async()=>{
-    await page.locator('#tone').click();await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');mock.emit({type:'error',error:{message:'must-not-display-secret'}});await until(async()=> (await rpc('speech:status')).state==='error');assert.ok(!(await rpc('speech:status')).message.includes('must-not-display-secret'));assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
+    await page.locator('#silent-audio').click();await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');mock.emit({type:'error',error:{message:'must-not-display-secret'}});await until(async()=> (await rpc('speech:status')).state==='error');assert.ok(!(await rpc('speech:status')).message.includes('must-not-display-secret'));assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
   });
   await step('The video stop control also stops the audio session instead of only hiding its captions',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');await rpc('video:action',{action:'stop'});assert.equal((await rpc('speech:status')).state,'stopped');assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
@@ -159,6 +173,6 @@ try{
     await activate();await popup.reload();await popup.locator('#speech-diagnostics summary').click();await until(async()=>(await popup.locator('#speech-diagnostics-text').textContent()).includes('P50'));const download=popup.waitForEvent('download');await popup.locator('#speech-diagnostics-export').click();const file=await download;await file.saveAs('artifacts/exported-latency.json');const raw=await readFile('artifacts/exported-latency.json','utf8');for(const secret of ['test-speech-key','test-text-key',origin,'皆さん','第一句字幕','sourceEndAt','山田太郎'])assert.ok(!raw.includes(secret),'Diagnostic leak: '+secret);
     await activate();await page.bringToFront();mock.emitStreaming({sentence_id:23,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証停止。'});await until(async()=>(await captionTexts()).some(t=>t.includes('译：検')));await rpc('speech:stop');await new Promise(r=>setTimeout(r,1300));assert.equal(await page.locator('[data-si-owned=video]').count(),0);assert.ok(streamTimings.some(t=>t.cancelled));await rpc('speech:diagnostics-clear');assert.equal((await rpc('speech:diagnostics')).samples,0);
   });
-  assert.deepEqual(errors,[]);await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,metrics:{frames:mock.stats.frames,audioBytes:mock.stats.audioBytes,nonzero:mock.stats.nonzero}},null,2));
+  assert.equal(mock.stats.nonzero,false);assert.deepEqual(errors,[]);await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,audioVerification:'muted real tabCapture with silent PCM; nonzero processing separately verified in OfflineAudioContext without an output device',metrics:{frames:mock.stats.frames,audioBytes:mock.stats.audioBytes,nonzero:mock.stats.nonzero}},null,2));
 }catch(error){await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,error:error.stack,state:await rpc('speech:status'),metrics:mock.stats,errors},null,2));throw error;}
 finally{await context.close();mock.close();await new Promise(resolve=>server.close(resolve));}
