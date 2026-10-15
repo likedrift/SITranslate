@@ -1,4 +1,4 @@
-import {DEFAULT_SPEECH,IDLE_SPEECH,validateSpeech,speechAuthRule,type SpeechStatus,type SpeechSettings} from './core/speech';
+import {DEFAULT_SPEECH,IDLE_SPEECH,normalizeSpeech,speechAuthRule,type SpeechStatus,type SpeechSettings} from './core/speech';
 import type {PublicConfig,TranslationInput,TranslationResult} from './core/types';
 import {Utterances,enqueuePiece,type SpeechPiece} from './core/utterances';
 export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number)=>Promise<TranslationResult>;cancel:(taskId:string)=>void}){
@@ -40,7 +40,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     finally{clearTimeout(timeout);if(run===epoch){busy=false;void pump();}}
   }
   async function start(test=false){
-    await stop();const saved=await chrome.storage.local.get('speechSettings');const settings:SpeechSettings=saved.speechSettings??DEFAULT_SPEECH;validateSpeech(settings);
+    await stop();const saved=await chrome.storage.local.get('speechSettings');const settings=normalizeSpeech(saved.speechSettings??DEFAULT_SPEECH);
     if(!settings.apiKey.trim())throw new Error('请先在设置的「实时语音」中填写百炼 API Key。');
     config=await deps.config();if(!test&&!config.ready)throw new Error('请先配置文字翻译模型。');
     const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!test&&(tab?.id===undefined||!/^https?:\/\//.test(tab.url??'')))throw new Error('请在直播网页打开工具栏，再点击开始。');
@@ -64,10 +64,11 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(m.type==='speech:failed')return serial(()=>m.sessionId===state.sessionId?stop(String(m.message??'音频连接失败。').slice(0,300),true):Promise.resolve(state));
       if(m.type==='speech:ready'){if(testing)return serial(()=>m.sessionId===state.sessionId?stop('语音连接成功，可以开始直播翻译。'):Promise.resolve(state));state.state='active';state.message='已连接，等待标签页声音。';await persist();return;}
       if(m.type==='speech:warning'){if(m.reconnecting){epoch++;busy=false;deps.cancel(`subtitle-live-${state.sessionId}`);state.state='connecting';utterances.reset();latest.clear();translatedPieces.clear();finalItems.clear();queue=[];shownOrder=-1;}state.message=String(m.message).slice(0,300);await persist();return;}
-      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';enqueue(utterances.flush());await persist();return;}
+      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(m.asrUsage&&['inputTokens','outputTokens','totalTokens'].every(k=>Number.isSafeInteger(m.asrUsage[k])&&m.asrUsage[k]>=0&&m.asrUsage[k]<=2e12))state.asrUsage={inputTokens:m.asrUsage.inputTokens,outputTokens:m.asrUsage.outputTokens,totalTokens:m.asrUsage.totalTokens};if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';enqueue(utterances.flush());await persist();return;}
       const text=typeof m.text==='string'?m.text.trim().slice(-1500):'',preview=typeof m.preview==='string'?m.preview.slice(0,500):'';
       const transcriptEpoch=epoch;state.lastSource=(text+preview).slice(0,2000);await caption({source:state.lastSource,preview:true});
       if(transcriptEpoch!==epoch||m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;
+      if(Number.isSafeInteger(m.beginMs)&&m.beginMs>=0)state.sourceTime={beginMs:m.beginMs,...(Number.isSafeInteger(m.endMs)&&m.endMs>=m.beginMs?{endMs:m.endMs}:{})};
       const itemId=String(m.itemId??'unknown').slice(0,100);enqueue(utterances.update(itemId,text,!!m.final));
       if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=(context+' '+text).slice(-600);}
       await persist();return;
@@ -75,7 +76,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     if(m.type==='speech:stop'&&!ui){if(sender.tab?.id!==state.tabId||m.sessionId!==state.sessionId)throw new Error('无权停止其他标签页音频。');return serial(()=>m.sessionId===state.sessionId?stop('视频已切换或拖动，请重新开始实时翻译。'):Promise.resolve(state));}
     if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
     if(m.type==='speech:settings-get')return (await chrome.storage.local.get('speechSettings')).speechSettings??DEFAULT_SPEECH;
-    if(m.type==='speech:settings-save'){validateSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:m.settings});return true;}
+    if(m.type==='speech:settings-save'){const next=normalizeSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:next});return true;}
     if(m.type==='speech:status')return {...state};
     if(m.type==='speech:start')return serial(()=>start());
     if(m.type==='speech:test')return serial(()=>start(true));

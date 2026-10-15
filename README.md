@@ -13,7 +13,7 @@
 5. 默认提供 DeepSeek 配置。填写自己的 API Key 和服务商支持的模型名称；API 服务地址默认是 `https://api.deepseek.com`。
 6. 点击「保存设置」。可使用「保存并测试连接」发送一小段测试文字，测试会使用自己的模型额度。
 
-也可解压 `si-translate-v0.4.0.zip` 后加载解压的文件夹；选择的文件夹中应直接包含 `manifest.json`。不要直接选择 ZIP。更新已有扩展时，将新版文件覆盖到原来的扩展目录，在 `chrome://extensions` 点击思译卡片上的重新加载，再刷新网页；API Key 和模型设置保留。若 Chrome 提示访问权限变化，需要允许后才能在所有网站自动显示划词按钮。
+也可解压 `si-translate-v0.5.0.zip` 后加载解压的文件夹；选择的文件夹中应直接包含 `manifest.json`。不要直接选择 ZIP。更新已有扩展时，将新版文件覆盖到原来的扩展目录，在 `chrome://extensions` 点击思译卡片上的重新加载，再刷新网页；API Key 和模型设置保留。若 Chrome 提示访问权限变化，需要允许后才能在所有网站自动显示划词按钮。
 
 DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与成本。模型名称、可用性和参数以[服务商当前文档](https://api-docs.deepseek.com/)为准。如果使用自定义兼容接口，填写基础地址（例如 `https://your-provider.example/v1`）、API Key 和模型名称。JSON 输出模式仅在服务商支持时开启；不支持流式接口时可关闭流式响应。
 
@@ -46,7 +46,7 @@ DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与
 
 ### 开播前配置
 
-1. 用 `si-translate-v0.4.0.zip` 的内容覆盖原扩展目录，在 `chrome://extensions` 点击思译「重新加载」。从 0.2.0 或更早版本升级会新增标签页音频、隐藏音频处理页及限定语音服务的 WebSocket 访问权限；若 Chrome 暂停扩展，需要允许更新权限后再刷新 YouTube。不要卸载旧扩展，以保留配置。
+1. 用 `si-translate-v0.5.0.zip` 的内容覆盖原扩展目录，在 `chrome://extensions` 点击思译「重新加载」。从 0.2.0 或更早版本升级会新增标签页音频、隐藏音频处理页及限定语音服务的 WebSocket 访问权限；若 Chrome 暂停扩展，需要允许更新权限后再刷新 YouTube。不要卸载旧扩展，以保留配置。
 2. 保留现有文字翻译配置（DeepSeek 或兼容服务），目标选择「简体中文」。建议关闭推理，并先用「保存并测试连接」确认文字服务可用。
 3. 点击弹窗「配置百炼语音 Key」，在「实时语音」填写自己的百炼 Key，默认模型 `qwen3-asr-flash-realtime`，直播语言「日语」。语音 Key 和文字模型 Key 分开保存。
 4. 默认北京地址 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime`。若 Key 在新加坡创建，改为 `wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime`；业务空间专用域名也可配置。Key 地域、模型开通和余额必须匹配。
@@ -69,6 +69,26 @@ DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与
 
 协议依据：[百炼 ASR 客户端事件](https://www.alibabacloud.com/help/en/model-studio/qwen-asr-realtime-client-events)、[服务端事件](https://www.alibabacloud.com/help/en/model-studio/qwen-asr-realtime-server-events)、[Chrome 标签页音频](https://developer.chrome.com/docs/extensions/reference/api/tabCapture)。
 
+## Qwen-Audio 3.1 Streaming（0.5.0）
+
+支持 `qwen-audio-3.1-asr-flash-streaming`，同时保留原来的 `qwen3-asr-flash-realtime`。升级不会自动替换已保存的模型，也不修改文字翻译配置。
+
+1. 更新扩展并刷新直播页，进入设置「实时语音」。
+2. 将「识别模型」填为 `qwen-audio-3.1-asr-flash-streaming`（输入框也提供候选）。
+3. 选择 Key 所属地域（北京或新加坡），填写该 Key 所属业务空间的 **Workspace ID**，从百炼该地域的业务空间详情复制。地址会自动生成，也可以直接粘贴完整业务空间地址：
+   - 北京：`wss://你的WorkspaceID.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference`
+   - 新加坡：`wss://你的WorkspaceID.ap-southeast-1.maas.aliyuncs.com/api-ws/v1/inference`
+4. 保留匹配该地域和业务空间的百炼 Key，直播语言选日语；3.1 的术语上下文最多 400 字。点击「保存并测试语音连接」。测试成功仅确认连接与任务参数。
+5. 回到 YouTube，从工具栏点击「开始实时翻译」。字幕拖动、外观、分句去重和文字翻译模型继续沿用现有功能。
+
+切回原模型时，将模型改为 `qwen3-asr-flash-realtime`，地址自动改为 `/api-ws/v1/realtime`，保存后重新开始。两个模型共用语音 Key、语言和术语配置；更换地域或业务空间时请同时使用匹配的 Key。
+
+3.1 使用独立 Inference WebSocket 协议，等待 `task-started` 后发送 16 kHz 单声道 PCM16 二进制帧；不会把旧版 `session.update` 协议发送给新模型。中间结果按同一句子的快照处理，只提前翻译 `words.fixed=true` 的连续稳定前缀；没有稳定标记时先预览原文，等待最终句子再翻译。仍使用 600 ms VAD 与现有分句规则，没有启用文档存在差异、尚未实测的语义断句参数。仅保存最新句级时间戳用于后续同步，不进行整场录音或转写历史存储。
+
+弹窗单独显示服务端已返回的累计语音输入/输出 Token；重复累计值不重复相加，重连后的新任务合并计数。停止时立即关闭音频与连接，可能收不到最终用量，所以此数值不是最终账单，也不计入文字翻译 Token。原模型的按秒计费仍以服务商账单为准。真实日语质量、费用和延迟需要试播比较，未因模型版本更高而自动设为默认。
+
+协议依据：[WebSocket 地址与交互](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-websocket-api)、[客户端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-client-events)、[服务端事件](https://help.aliyun.com/zh/model-studio/qwen-audio-asr-streaming-server-events)。
+
 ## 字幕位置与显示（0.4.0）
 
 - 拖动字幕上方的「拖动字幕」手柄；也可让手柄获得焦点后用方向键微调，Shift 加快移动。
@@ -79,9 +99,9 @@ DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与
 
 ## 回退版本
 
-本机保留 `si-translate-v0.3.0.zip`，仓库标签 `v0.3.0` 对应优化前的版本；新包为 `si-translate-v0.4.0.zip`。
+本机保留 `si-translate-v0.4.0.zip` 与更早版本；仓库标签 `v0.4.0` 对应加入双模型支持前的版本，新包为 `si-translate-v0.5.0.zip`。
 
-1. 在弹窗停止实时音频翻译。
+1. 在弹窗停止实时音频翻译。若使用了 3.1，先在语音设置切回 `qwen3-asr-flash-realtime` 并保存，使地址恢复 `/realtime`；旧版不能识别新模型名和 `/inference` 地址。
 2. 将旧版 ZIP 解压，使用其中的文件覆盖**当前已加载扩展的同一个目录**（例如 `dist`）；不要加载到另一个目录或卸载扩展，以免产生另一份配置。
 3. 在 `chrome://extensions` 点击思译「重新加载」，再刷新直播网页。
 

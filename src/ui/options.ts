@@ -1,7 +1,7 @@
 import {type Settings,type Profile,type TranslationResult} from '../core/types';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
-import {validateSpeech,type SpeechSettings,type SpeechStatus} from '../core/speech';
+import {normalizeSpeech,isStreaming,type SpeechSettings,type SpeechStatus} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[];
 const fields=['profile-name','base-url','api-key','model','input-price','output-price'];
 function feedback(text:string,state=''){el('feedback').textContent=text;el('feedback').className=state;}
@@ -57,6 +57,7 @@ el('clear-usage').addEventListener('click',()=>rpc('usage:clear').then(refreshUs
 for(const id of fields)el(id).addEventListener('input',()=>feedback('有未保存的修改。'));
 async function init(){settings=await rpc<Settings>('settings:get');editing=settings.activeProfileId;
   const speech=await rpc<SpeechSettings>('speech:settings-get');for(const [id,key] of [['speech-key','apiKey'],['speech-endpoint','endpoint'],['speech-model','model'],['speech-language','language'],['speech-context','context']] as const)el<HTMLInputElement>(id).value=speech[key];
+  readSpeechAddress();speechModelHelp();
   languageOptions(el<HTMLSelectElement>('target'));el<HTMLSelectElement>('target').value=settings.target;el<HTMLSelectElement>('display').value=settings.display;el<HTMLSelectElement>('max-chars').value=String(settings.maxPageChars);
   el<HTMLInputElement>('dynamic').checked=settings.dynamic;el<HTMLInputElement>('include-context').checked=settings.includeContext;el<HTMLInputElement>('cache-enabled').checked=settings.cacheEnabled;
   fillProfile();origins=await rpc<string[]>('selection:origins');renderOrigins();await refreshUsage();
@@ -64,8 +65,20 @@ async function init(){settings=await rpc<Settings>('settings:get');editing=setti
 void init().catch(err=>feedback(err.message,'error'));
 async function saveSpeech(test=false){
   const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim()};
-  try{validateSpeech(data);await rpc('speech:settings-save',{settings:data});el('speech-feedback').textContent='语音配置已保存。';
+  try{const next=normalizeSpeech(data);await rpc('speech:settings-save',{settings:next});el<HTMLInputElement>('speech-endpoint').value=next.endpoint;readSpeechAddress();el('speech-feedback').textContent='语音配置已保存。';
     if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=await rpc<SpeechStatus>('speech:status');el('speech-feedback').textContent=state.message;if(state.state!=='connecting')return;}el('speech-feedback').textContent='连接测试超时，请检查网络与地域。';}
   }catch(error){el('speech-feedback').textContent=error instanceof Error?error.message:'语音配置保存失败。';}
 }
 el('speech-save').addEventListener('click',()=>void saveSpeech());el('speech-test').addEventListener('click',()=>void saveSpeech(true));
+function speechModelHelp(){const streaming=isStreaming(value('speech-model').trim());el<HTMLTextAreaElement>('speech-context').maxLength=streaming?400:2000;el('speech-context-help').textContent=streaming?'3.1 Streaming 最多 400 字，填写日语人名、作品与节目背景。':'原版术语上下文最多 2000 字。';el('speech-address-help').textContent=streaming?'3.1 需要业务空间专属地址，填写 Workspace ID 后自动生成。Key 必须匹配地域和业务空间。':'可使用默认地址或业务空间专属地址，Key 必须匹配地域。';}
+function readSpeechAddress(){try{const url=new URL(value('speech-endpoint')),match=url.hostname.match(/^([a-zA-Z0-9-]+)\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/);el<HTMLInputElement>('speech-workspace').value=match?.[1]??'';el<HTMLSelectElement>('speech-region').value=match?.[2]??(url.hostname==='dashscope-intl.aliyuncs.com'?'ap-southeast-1':'cn-beijing');}catch{}}
+function buildSpeechAddress(){
+  const workspace=value('speech-workspace').trim(),region=value('speech-region'),streaming=isStreaming(value('speech-model').trim());speechModelHelp();
+  if(workspace&&!/^[a-zA-Z0-9-]+$/.test(workspace)){el('speech-feedback').textContent='Workspace ID 只填写业务空间 ID，不包含域名、网址或空格。';return;}
+  let local:URL|undefined;try{const u=new URL(value('speech-endpoint'));if(u.protocol==='ws:'&&['127.0.0.1','localhost','[::1]'].includes(u.hostname)&&!workspace)local=u;}catch{}
+  const host=workspace?`${workspace}.${region}.maas.aliyuncs.com`:region==='ap-southeast-1'?'dashscope-intl.aliyuncs.com':'dashscope.aliyuncs.com';
+  el<HTMLInputElement>('speech-endpoint').value=`${local?.origin??'wss://'+host}/api-ws/v1/${streaming?'inference':'realtime'}`;
+  el('speech-feedback').textContent=streaming&&!workspace&&!local?'请填写对应地域的 Workspace ID，或粘贴完整业务空间地址。':'有未保存的语音配置。';
+}
+for(const id of ['speech-model','speech-region','speech-workspace'])el(id).addEventListener('change',buildSpeechAddress);
+el('speech-endpoint').addEventListener('change',readSpeechAddress);
