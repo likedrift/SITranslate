@@ -4,6 +4,7 @@ import {Scheduler} from './core/scheduler';
 import {adapterFor,ProviderError} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
+import {createSpeechController} from './speech-background';
 
 const scheduler=new Scheduler(2),cache=new TranslationCache();
 const sharedRequests=new SharedWork<TranslationResult>();
@@ -30,6 +31,7 @@ const initialized=(async()=>{
   if(selectionDefaults.selectionDefaultsVersion!==1)await chrome.storage.local.set({selectionDefaultsVersion:1,selectionOrigins:['https://*/*','http://*/*']});
 })();
 const trusted=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && !!sender.url?.startsWith(chrome.runtime.getURL(''));
+const speech=createSpeechController({ready:initialized,config:safeConfig,translate:async(input,tabId)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url});},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
 const pageSender=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && sender.tab?.id!==undefined && /^https?:\/\//.test(sender.url??'');
 function errorText(error:unknown){return error instanceof Error?error.message:'操作失败，请重试。';}
 async function recordJob(key:string,state:string) {
@@ -141,6 +143,7 @@ async function selectionState(url:string){
 }
 async function route(message:any,sender:chrome.runtime.MessageSender){
   await initialized;if(!message||typeof message.type!=='string')throw new Error('无效消息。');
+  if(message.type.startsWith('speech:'))return speech.route(message,sender);
   const ui=trusted(sender);
   if(message.type==='selection:state'&&(ui||pageSender(sender)))return selectionState(ui?String(message.url??''):sender.url!);
   if(message.type==='translate')return translate(message.input,sender);
@@ -169,6 +172,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     case 'tab:action':return tabAction(message.action);
     case 'video:action':{
       if(!['start','stop','display','retry'].includes(message.action))throw new Error('不支持的视频操作。');
+      if(message.action==='start'||message.action==='stop')await speech.route({type:'speech:stop'},sender);
       const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
       const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
       return chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
@@ -188,6 +192,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   }
 }
 chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{
+  if(message?.target==='speech-offscreen')return;
   route(message,sender).then(data=>sendResponse({ok:true,data}),error=>sendResponse({ok:false,error:errorText(error)}));return true;
 });
 chrome.runtime.onInstalled.addListener(async()=>{

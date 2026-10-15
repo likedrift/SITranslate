@@ -1,6 +1,7 @@
 import {type Settings,type Profile,type TranslationResult} from '../core/types';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
+import {validateSpeech,type SpeechSettings,type SpeechStatus} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[];
 const fields=['profile-name','base-url','api-key','model','input-price','output-price'];
 function feedback(text:string,state=''){el('feedback').textContent=text;el('feedback').className=state;}
@@ -55,8 +56,16 @@ el('clear-cache').addEventListener('click',()=>rpc('cache:clear').then(refreshUs
 el('clear-usage').addEventListener('click',()=>rpc('usage:clear').then(refreshUsage).then(()=>feedback('用量统计已重置。','success')).catch(err=>feedback(err.message,'error')));
 for(const id of fields)el(id).addEventListener('input',()=>feedback('有未保存的修改。'));
 async function init(){settings=await rpc<Settings>('settings:get');editing=settings.activeProfileId;
+  const speech=await rpc<SpeechSettings>('speech:settings-get');for(const [id,key] of [['speech-key','apiKey'],['speech-endpoint','endpoint'],['speech-model','model'],['speech-language','language'],['speech-context','context']] as const)el<HTMLInputElement>(id).value=speech[key];
   languageOptions(el<HTMLSelectElement>('target'));el<HTMLSelectElement>('target').value=settings.target;el<HTMLSelectElement>('display').value=settings.display;el<HTMLSelectElement>('max-chars').value=String(settings.maxPageChars);
   el<HTMLInputElement>('dynamic').checked=settings.dynamic;el<HTMLInputElement>('include-context').checked=settings.includeContext;el<HTMLInputElement>('cache-enabled').checked=settings.cacheEnabled;
   fillProfile();origins=await rpc<string[]>('selection:origins');renderOrigins();await refreshUsage();
 }
 void init().catch(err=>feedback(err.message,'error'));
+async function saveSpeech(test=false){
+  const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim()};
+  try{validateSpeech(data);await rpc('speech:settings-save',{settings:data});el('speech-feedback').textContent='语音配置已保存。';
+    if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=await rpc<SpeechStatus>('speech:status');el('speech-feedback').textContent=state.message;if(state.state!=='connecting')return;}el('speech-feedback').textContent='连接测试超时，请检查网络与地域。';}
+  }catch(error){el('speech-feedback').textContent=error instanceof Error?error.message:'语音配置保存失败。';}
+}
+el('speech-save').addEventListener('click',()=>void saveSpeech());el('speech-test').addEventListener('click',()=>void saveSpeech(true));

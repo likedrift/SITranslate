@@ -4,7 +4,7 @@ import { deflateSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 
 await build({ configFile: false, build: { outDir: 'dist', rollupOptions: {
-  input: { popup: 'popup.html', options: 'options.html', background: 'src/background.ts' },
+  input: { popup: 'popup.html', options: 'options.html', offscreen:'offscreen.html', background: 'src/background.ts' },
   output: { entryFileNames: '[name].js', chunkFileNames: 'assets/[name]-[hash].js' }
 } } });
 await build({ configFile: false, publicDir: false, build: { outDir: 'dist', emptyOutDir: false,

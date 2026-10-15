@@ -7,3 +7,5 @@
 @media(prefers-reduced-motion:reduce){*{transition:none!important;scroll-behavior:auto!important}}
 
 .video-help{padding:14px 0}.video-help strong{font-size:12px}.video-help p{font-size:11px;line-height:1.6;margin:6px 0}.video-check{display:flex;flex-direction:row;align-items:center;gap:6px;font-size:12px;margin-top:8px}.video-help .row{flex-wrap:wrap;gap:6px}.video-help .row button{min-height:34px;padding:7px 13px;font-size:12px}.popup{max-height:600px;overflow-y:auto}
+
+#speech-feedback{margin-top:10px}.form-grid textarea{width:100%;resize:vertical;padding:10px 12px;border:1px solid var(--border);border-radius:10px;background:var(--surface);color:var(--text);font:inherit;font-weight:400}

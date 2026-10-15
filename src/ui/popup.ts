@@ -1,5 +1,6 @@
 import {type Settings,type PageStatus,type VideoStatus} from '../core/types';
 import {rpc,el,value,languageOptions,sitePattern} from './client';
+import type {SpeechStatus} from '../core/speech';
 let settings:Settings;let busy=false;let currentTab:chrome.tabs.Tab|undefined;
 async function refreshSelection(){
   const state=await rpc<{enabled:boolean;supported:boolean}>('selection:state',{url:currentTab?.url??''});
@@ -22,7 +23,7 @@ async function refresh(){try{paint(await rpc<PageStatus>('tab:status'));}catch(e
 function paintVideo(s:VideoStatus){
   el('video-state').textContent=[s.source,s.message,s.completed?`已翻译 ${s.completed} 条字幕`: ''].filter(Boolean).join(' · ');
   el<HTMLButtonElement>('video-stop').disabled=!['loading','active'].includes(s.state);
-  el('video-retry').hidden=s.state!=='active';el<HTMLButtonElement>('video-start').disabled=s.state==='loading';
+  el('video-retry').hidden=s.state!=='active'||s.source==='标签页音频';el<HTMLButtonElement>('video-start').disabled=s.state==='loading';
   el('video-start').textContent=s.state==='active'?'重新开始':'翻译视频字幕';
   el<HTMLInputElement>('video-bilingual').checked=s.bilingual;
 }
@@ -63,3 +64,8 @@ chrome.permissions.onAdded.addListener(()=>void refreshSelection().catch(()=>{})
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection().catch(()=>{}));
 void init().catch(err=>error(err.message));
 setInterval(()=>void refreshVideo(),1000);
+async function refreshSpeech(){try{const s=await rpc<SpeechStatus>('speech:status');el('speech-state').textContent=s.message+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';}catch{}}
+el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
+el('speech-stop').addEventListener('click',()=>void rpc('speech:stop').then(refreshSpeech).catch(e=>error(e.message)));
+el('speech-settings').addEventListener('click',()=>void chrome.tabs.create({url:chrome.runtime.getURL('options.html#speech')}));
+void refreshSpeech();setInterval(()=>void refreshSpeech(),1000);

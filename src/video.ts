@@ -13,11 +13,13 @@ function boot(){
   let entries=new Map<string,Entry>(),current:SubtitleCue[]=[],working=false,sequence=0;
   let youtube=false,videoId='',mediaSource='',captionText='',lastTime=0,lastSource='',lastError='';
   let captionChangedAt=0;
+  let liveSession='',liveShownAt=0;
   const disposers:(()=>void)[]=[];
   async function rpc<T=unknown>(value:unknown):Promise<T>{const r=await chrome.runtime.sendMessage(value);if(!r?.ok)throw new Error(r?.error??'扩展连接中断。');return r.data;}
   function cancel(){if(task)void rpc({type:'task:cancel',taskId:task}).catch(()=>{});task=`subtitle-${crypto.randomUUID()}`;generation++;working=false;for(const e of entries.values())if(e.state==='running')e.state='pending';}
   function listen(target:EventTarget,event:string,fn:()=>void){target.addEventListener(event,fn);disposers.push(()=>target.removeEventListener(event,fn));}
   function stop(message='字幕翻译已停止。'){
+    liveSession='';
     cancel();if(timer)clearInterval(timer);if(loadingTimer)clearTimeout(loadingTimer);timer=undefined;loadingTimer=undefined;
     for(const dispose of disposers.splice(0))dispose();
     if(track&&originalMode&&track.mode==='hidden')track.mode=originalMode;
@@ -36,10 +38,10 @@ function boot(){
     card.append(original,translated);shadow.append(style,card);document.documentElement.append(host);
   }
   function render(){
-    if(!video||!host||!original||!translated)return;
-    const full=document.fullscreenElement,parent=full&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
+    if(!host||!original||!translated||(!video&&!liveSession))return;
+    const full=document.fullscreenElement,parent=full&&video&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
-    const rect=video.getBoundingClientRect(),source=current.map(c=>c.text).join('\n');
+    const rect=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight),source=current.map(c=>c.text).join('\n');
     const texts=current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
     // Source remains readable while translation is in progress or has failed.
     original.textContent=status.bilingual||!texts?source:'';translated.textContent=texts;
@@ -61,6 +63,7 @@ function boot(){
     while(entries.size>240){const oldest=entries.keys().next().value!;entries.delete(oldest);}
   }
   function tick(){
+    if(liveSession){render();return;}
     if(!video||status.state!=='active')return;
     if(!video.isConnected||(mediaSource&&video.currentSrc!==mediaSource)||(youtube&&new URL(location.href).searchParams.get('v')!==videoId)){stop('视频已切换，请重新开启字幕翻译。');return;}
     const time=video.currentTime;
@@ -125,10 +128,23 @@ function boot(){
   chrome.runtime.onMessage.addListener((m,sender,respond)=>{
     if(sender.id!==chrome.runtime.id||!m?.type?.startsWith('video:'))return;
     if(m.type==='video:get-status'){respond(status);return;}
+    if(m.type==='video:live-start'){
+      stop();liveSession=m.sessionId;video=findVideo();status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:true};overlay();
+      const end=()=>{void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});};
+      if(video){listen(video,'seeking',end);listen(video,'emptied',end);}listen(document,'fullscreenchange',render);
+      timer=setInterval(()=>{if(video&&!video.isConnected){end();stop();return;}render();},250);render();respond(true);return;
+    }
+    if(m.type==='video:live-caption'){
+      if(m.sessionId!==liveSession){respond(false);return;}
+      if(m.stop){stop();respond(true);return;}
+      if(m.preview&&Date.now()-liveShownAt<8000){respond(true);return;}
+      const cue:SubtitleCue={id:'live',text:String(m.source??'').slice(0,2000),start:0,end:Infinity,context:''};current=[cue];entries.set('live',{cue,state:'done',text:m.preview?'':String(m.translation??'').slice(0,6000)});
+      if(!m.preview){liveShownAt=Date.now();status.completed++;}render();respond(true);return;
+    }
     if(m.type==='video:stop'){stop();respond(status);return;}
     if(m.type==='video:display'){status.bilingual=m.bilingual!==false;render();respond(status);return;}
     if(m.type==='video:retry'){lastError='';for(const e of entries.values())if(e.state==='failed')e.state='pending';tick();respond(status);return;}
     if(m.type==='video:start'){void start(m.config,m.bilingual!==false).then(()=>respond(status),error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';respond(status);});return true;}
   });
-  window.addEventListener('pagehide',()=>stop());
+  window.addEventListener('pagehide',()=>{if(liveSession)void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});stop();});
 }
