@@ -4,6 +4,22 @@ export interface CaptionBox {left:number;top:number;width:number;height:number}
 export type CaptionCorner='nw'|'ne'|'sw'|'se';
 export interface CaptionLayout {fontSize:number;width:number;opacity:number;mode:'video'|'screen';locked:boolean;showOriginal:boolean;readingMode?:'balanced'|'live';normal?:CaptionPosition;fullscreen?:CaptionPosition;normalSize?:CaptionSize;fullscreenSize?:CaptionSize}
 export const DEFAULT_CAPTION:CaptionLayout={fontSize:22,width:68,opacity:.78,mode:'video',locked:false,showOriginal:true};
+// Old captionLayout rows may omit showOriginal or store the overlay flag as bilingual. Map once; leave unrelated invalid rows untouched.
+export function migrateCaption(raw:unknown):CaptionLayout|undefined{
+  if(!raw||typeof raw!=='object')return;
+  const record=raw as Record<string,unknown>;
+  if(!('bilingual' in record)&&typeof record.showOriginal==='boolean')return;
+  const bilingual=record.bilingual;
+  const showOriginal=typeof record.showOriginal==='boolean'?record.showOriginal:typeof bilingual==='boolean'?bilingual:DEFAULT_CAPTION.showOriginal;
+  const next={...record,showOriginal} as CaptionLayout&{bilingual?:unknown};
+  delete next.bilingual;
+  try{validateCaption(next);return next;}catch{return;}
+}
+export function normalizeCaption(raw:unknown):CaptionLayout{
+  const migrated=migrateCaption(raw);
+  if(migrated)return migrated;
+  try{validateCaption(raw as CaptionLayout);return raw as CaptionLayout;}catch{return structuredClone(DEFAULT_CAPTION);}
+}
 export function validateCaption(s:CaptionLayout){
   if(s?.readingMode!==undefined&&!['balanced','live'].includes(s.readingMode))throw new Error('字幕阅读模式无效。');
   if(!s||!Number.isFinite(s.fontSize)||s.fontSize<14||s.fontSize>40||!Number.isFinite(s.width)||s.width<35||s.width>95||!Number.isFinite(s.opacity)||s.opacity<.1||s.opacity>1||!['video','screen'].includes(s.mode)||typeof s.locked!=='boolean'||typeof s.showOriginal!=='boolean')throw new Error('字幕显示设置无效。');

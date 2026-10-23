@@ -1,7 +1,7 @@
 <!doctype html>
 <html lang="zh-Hans"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>思译 · 设置</title><link rel="stylesheet" href="/src/ui/style.css"></head>
 <body class="options"><div class="settings-shell">
-  <aside><a class="brand brand-link" href="#"><span class="brand-mark" aria-hidden="true">译</span><div><h1>思译</h1><p>Si Translate</p></div></a><nav aria-label="设置导航"><a href="#providers" class="nav-link">模型服务</a><a href="#speech" class="nav-link">实时语音</a><a href="#reading" class="nav-link">阅读偏好</a><a href="#selection" class="nav-link">划词与网站</a><a href="#data" class="nav-link">用量与数据</a></nav><div class="aside-note">你的文字，<br>由你选择的模型翻译。<span>VERSION 0.6.0</span></div></aside>
+  <aside><a class="brand brand-link" href="#"><span class="brand-mark" aria-hidden="true">译</span><div><h1>思译</h1><p>Si Translate</p></div></a><nav aria-label="设置导航"><a href="#providers" class="nav-link">模型服务</a><a href="#speech" class="nav-link">实时语音</a><a href="#reading" class="nav-link">阅读偏好</a><a href="#selection" class="nav-link">划词与网站</a><a href="#data" class="nav-link">用量与数据</a></nav><div class="aside-note">你的文字，<br>由你选择的模型翻译。<span id="app-version">VERSION 0.7.0</span></div></aside>
   <main><header class="page-heading"><div class="eyebrow">MAKE READING FLOW</div><h1>按你的方式阅读世界</h1><p>连接模型、选择语言，剩下的交给思译。</p></header>
     <form id="settings-form">
       <section class="card" id="providers"><div class="section-heading"><div><h2>模型服务</h2><p>使用自己的 API Key，直接连接服务商。</p></div><span class="chip">自带密钥</span></div>
@@ -26,7 +26,7 @@
       </section>
       <section class="card" id="reading"><div class="section-heading"><div><h2>阅读偏好</h2><p>整页翻译先处理当前屏幕，再继续处理其余内容。</p></div></div>
         <div class="form-grid"><label>目标语言<select id="target"></select></label><label>默认显示<select id="display"><option value="replace">译文 · 替换原文</option><option value="bilingual">双语 · 原文后附译文</option></select></label><label class="wide">单页文字上限<select id="max-chars"><option value="50000">50,000 字符 · 较省费用</option><option value="100000">100,000 字符 · 推荐</option><option value="200000">200,000 字符</option><option value="500000">500,000 字符 · 超长页面</option></select><small>达到上限后停止增加新内容；已发出的请求仍可能计费。</small></label></div>
-        <div class="switch-list"><label><div><strong>翻译动态新增内容</strong><small>仅在本页已开始翻译后生效；不会自动滚动加载。</small></div><input id="dynamic" type="checkbox" role="switch"></label><label><div><strong>划词附带段落上下文</strong><small>点击翻译时同时发送所在段落，帮助理解歧义。</small></div><input id="include-context" type="checkbox" role="switch"></label><label><div><strong>复用本次浏览会话的译文</strong><small>有容量上限，浏览器重启后清除。</small></div><input id="cache-enabled" type="checkbox" role="switch"></label></div>
+        <div class="switch-list"><label><div><strong>翻译动态新增内容</strong><small>仅在本页已开始翻译后生效；不会自动滚动加载。</small></div><input id="dynamic" type="checkbox" role="switch"></label><label><div><strong>划词附带段落上下文</strong><small>点击翻译时同时发送所在段落，帮助理解歧义。</small></div><input id="include-context" type="checkbox" role="switch"></label><label><div><strong>复用本次浏览会话的译文</strong><small>有容量上限，浏览器重启后清除。</small></div><input id="cache-enabled" type="checkbox" role="switch"></label><label><div><strong>视频与实时字幕同时显示原文</strong><small>与工具栏弹窗中的「同时显示原文」共用。</small></div><input id="caption-original" type="checkbox" role="switch"></label></div>
       </section>
       <section class="card" id="selection"><div class="section-heading"><div><h2>划词与网站</h2><p>选中只显示按钮，点击才发送文字。</p></div></div>
         <p class="muted">默认在所有普通网站开启划词。可移除下方范围，改为只在指定网站启用。选中文字不会发送请求。</p>

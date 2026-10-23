@@ -1,6 +1,21 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {DEFAULT_CAPTION,validateCaption,captionBounds,captionPages,resizeCaptionBox,type CaptionCorner} from '../src/core/caption-layout.ts';
+import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,captionBounds,captionPages,resizeCaptionBox,type CaptionCorner} from '../src/core/caption-layout.ts';
+import {NO_VIDEO_CAPTION_MESSAGE} from '../src/core/types.ts';
 import {Utterances,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
+test('Caption original display migrates once onto showOriginal',()=>{
+  const legacy={...DEFAULT_CAPTION,fontSize:30,showOriginal:undefined,bilingual:false};
+  const migrated=migrateCaption(legacy);
+  assert.equal(migrated?.showOriginal,false);assert.equal(migrated?.fontSize,30);assert.equal('bilingual' in (migrated??{}),false);
+  assert.equal(normalizeCaption({...DEFAULT_CAPTION,showOriginal:false,bilingual:true}).showOriginal,false);
+  assert.equal(normalizeCaption({...DEFAULT_CAPTION,fontSize:18,showOriginal:undefined}).fontSize,18);
+  assert.equal(normalizeCaption({...DEFAULT_CAPTION,fontSize:18,showOriginal:undefined}).showOriginal,true);
+  assert.equal(migrateCaption(DEFAULT_CAPTION),undefined);
+  assert.equal(normalizeCaption({fontSize:9}).fontSize,DEFAULT_CAPTION.fontSize);
+  assert.equal(normalizeCaption(null).showOriginal,true);
+  assert.match(NO_VIDEO_CAPTION_MESSAGE,/没有可读取的字幕/);
+  assert.match(NO_VIDEO_CAPTION_MESSAGE,/开始实时翻译/);
+  assert.doesNotMatch(NO_VIDEO_CAPTION_MESSAGE,/后续版本/);
+});
 test('Caption settings validate ranges and independent fullscreen positions',()=>{
   validateCaption({...DEFAULT_CAPTION,normal:{x:0,y:1},fullscreen:{x:1,y:0}});
   for(const patch of [{fontSize:NaN},{width:100},{opacity:0},{normal:{x:-1,y:0}},{fullscreen:null}])assert.throws(()=>validateCaption({...DEFAULT_CAPTION,...patch} as any));

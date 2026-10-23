@@ -1,6 +1,6 @@
-import {EMPTY_VIDEO_STATUS,type PublicConfig,type TranslationResult,type VideoStatus} from './core/types';
+import {EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,type PublicConfig,type TranslationResult,type VideoStatus} from './core/types';
 import {cueIndex,activeSubtitle,subtitleText,type SubtitleCue} from './core/subtitles';
-import {DEFAULT_CAPTION,captionBounds,captionPages,clamp,resizeCaptionBox,type CaptionLayout,type CaptionBox,type CaptionCorner} from './core/caption-layout';
+import {DEFAULT_CAPTION,normalizeCaption,captionBounds,captionPages,clamp,resizeCaptionBox,type CaptionLayout,type CaptionBox,type CaptionCorner} from './core/caption-layout';
 import {LiveReader} from './core/live-reader';
 
 // Loaded only after an explicit video action; ordinary pages do not load this module.
@@ -18,7 +18,7 @@ function boot(){
   let liveSession='',liveShownAt=0;
   const reader=new LiveReader();let livePreview='',previousLine:HTMLDivElement|undefined,liveTools:HTMLDivElement|undefined,holdButton:HTMLButtonElement|undefined,liveHint:HTMLSpanElement|undefined;
   const painted=new Set<string>();let paintScheduled=false;
-  let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),card:HTMLDivElement|undefined,handle:HTMLButtonElement|undefined,pager:HTMLDivElement|undefined;
+  let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),layoutEpoch=0,card:HTMLDivElement|undefined,handle:HTMLButtonElement|undefined,pager:HTMLDivElement|undefined;
   let content:HTMLDivElement|undefined,pendingLayout:CaptionLayout|undefined;
   let pageIndex=0,pageKey='',pageAt=0,pageCount=1;
   let drag:{x:number;y:number;pointerId:number;box:CaptionBox;area:CaptionBox;before:CaptionLayout;full:boolean;corner?:CaptionCorner;minHeight:number;moved:boolean}|undefined;
@@ -70,7 +70,7 @@ function boot(){
     }
     shadow.append(style,handle,card);document.documentElement.append(host);
     listen(window,'resize',()=>{finishGesture(true);render();});
-    const run=generation;void rpc<CaptionLayout>({type:'caption:get'}).then(s=>{if(run!==generation)return;layout=s;status.bilingual=s.showOriginal;render();}).catch(()=>{});
+    const run=generation,epoch=layoutEpoch;void rpc<CaptionLayout>({type:'caption:get'}).then(s=>{if(run!==generation||epoch!==layoutEpoch)return;useLayout(s);render();}).catch(()=>{});
   }
   function beginGesture(e:PointerEvent,corner?:CaptionCorner){
     if(layout.locked||e.button!==0||drag||!host||!card)return;e.preventDefault();e.stopPropagation();
@@ -93,10 +93,13 @@ function boot(){
     const key=d.full?'fullscreen':'normal',position=layout[key],size=layout[d.full?'fullscreenSize':'normalSize'];
     if(pendingLayout){layout=pendingLayout;pendingLayout=undefined;}status.bilingual=layout.showOriginal;render();
     if(cancelled||!d.moved)return;
-    const run=generation;void rpc<CaptionLayout>({type:'caption:geometry',context:key,position,size}).then(s=>{if(run===generation&&!drag){layout=s;status.bilingual=s.showOriginal;render();}}).catch(()=>{});
+    const run=generation,epoch=layoutEpoch;void rpc<CaptionLayout>({type:'caption:geometry',context:key,position,size}).then(s=>{if(run===generation&&epoch===layoutEpoch&&!drag){useLayout(s);render();}}).catch(()=>{});
   }
+  function useLayout(next:CaptionLayout){layout=next;status.bilingual=layout.showOriginal;}
+  async function ensureLayout(){const run=generation,epoch=layoutEpoch;try{const stored=(await chrome.storage.local.get('captionLayout')).captionLayout;if(run!==generation||epoch!==layoutEpoch)return;useLayout(normalizeCaption(stored));}catch{status.bilingual=layout.showOriginal;}}
   function savePosition(full:boolean){void rpc({type:'caption:position',context:full?'fullscreen':'normal',position:layout[full?'fullscreen':'normal']}).catch(()=>{});}
   function render(){
+    status.bilingual=layout.showOriginal;
     if(!host||!original||!translated||!card||!handle||!pager||(!video&&!liveSession))return;
     const full=document.fullscreenElement,parent=full&&video&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
@@ -105,7 +108,7 @@ function boot(){
     const texts=liveSession?(active?.text??''):current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
     if(drag&&drag.full!==!!full)finishGesture(true);
     const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.minHeight=bounds.height?`${Math.min(bounds.height,bounds.areaHeight)}px`:'';card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(21,25,35,${layout.opacity})`;card.classList.toggle('locked',layout.locked);card.classList.toggle('moving',!!drag?.moved);handle.hidden=layout.locked;
-    const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*2),targets=captionPages(texts,limit),sources=captionPages(status.bilingual||!texts?source:'',Math.floor(limit/ .78));
+    const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*2),targets=captionPages(texts,limit),sources=captionPages(layout.showOriginal||!texts?source:'',Math.floor(limit/ .78));
     pageCount=Math.max(targets.length,sources.length);const key=(liveSession?active?.id??'preview':source+'\0'+texts)+'\0'+limit;
     if(key!==pageKey){pageKey=key;pageIndex=0;pageAt=Date.now();}
     if(!drag&&(!liveSession||!reader.paused)&&pageCount>1&&Date.now()-pageAt>Math.max(2500,Math.min(6000,limit*90))){pageIndex=(pageIndex+1)%pageCount;pageAt=Date.now();}
@@ -183,13 +186,14 @@ function boot(){
     }catch(error){if(run===generation){selected.forEach(e=>e.state='failed');lastError=status.message=(error instanceof Error?error.message:'字幕翻译失败。')+' 可点击重试，原文仍保留。';render();}}
     finally{clearTimeout(timeout);if(run===generation){working=false;void pump();}}
   }
-  async function start(next:PublicConfig,bilingual:boolean){
-    stop();status={state:'loading',source:'',completed:0,message:'正在寻找视频字幕…',bilingual};config=next;
+  async function start(next:PublicConfig){
+    stop();const run=generation;await ensureLayout();if(run!==generation)return;
+    status={state:'loading',source:'',completed:0,message:'正在寻找视频字幕…',bilingual:layout.showOriginal};config=next;
     video=findVideo();if(!video){status.state='error';status.message='没有找到当前页面可访问的视频；嵌入其他网站的播放器暂不支持。';return;}
     youtube=(location.hostname==='youtube.com'||location.hostname.endsWith('.youtube.com'))&&!!video.closest('#movie_player');
     const tracks=Array.from(video.textTracks).filter(t=>['subtitles','captions'].includes(t.kind));
     track=tracks.find(t=>t.mode==='showing')??tracks[0];
-    if(!track&&!youtube){video=undefined;status.state='error';status.message='这个视频没有可读取的字幕。语音识别将在后续版本提供。';return;}
+    if(!track&&!youtube){video=undefined;status.state='error';status.message=NO_VIDEO_CAPTION_MESSAGE;return;}
     originalMode=track?.mode;if(track){track.mode='hidden';status.source=track.label||track.language||'视频字幕轨道';youtube=false;}else status.source='YouTube 当前字幕';
     mediaSource=video.currentSrc;videoId=new URL(location.href).searchParams.get('v')??'';captionText='';lastSource='';lastTime=video.currentTime;
     overlay();status.state='active';status.message=youtube?'请在 YouTube 播放器中开启字幕；仅翻译当前显示的内容。':'正在读取字幕…';
@@ -202,13 +206,18 @@ function boot(){
   }
   chrome.runtime.onMessage.addListener((m,sender,respond)=>{
     if(sender.id!==chrome.runtime.id||!m?.type?.startsWith('video:'))return;
-    if(m.type==='video:layout'){if(drag){pendingLayout=m.layout;if(m.layout.locked)finishGesture(true);}else{layout=m.layout;status.bilingual=layout.showOriginal;render();}respond(true);return;}
-    if(m.type==='video:get-status'){respond(status);return;}
+    if(m.type==='video:layout'){layoutEpoch++;if(drag){pendingLayout=m.layout;if(m.layout.locked)finishGesture(true);}else{useLayout(m.layout);render();}respond(true);return;}
+    if(m.type==='video:get-status'){status.bilingual=layout.showOriginal;respond(status);return;}
     if(m.type==='video:live-start'){
-      stop();liveSession=m.sessionId;liveShownAt=0;video=findVideo();status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:true};overlay();
-      const end=()=>{void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});};
-      if(video){listen(video,'seeking',end);listen(video,'emptied',end);}listen(document,'fullscreenchange',render);
-      timer=setInterval(()=>{if(video&&!video.isConnected){end();stop();return;}render();},250);render();respond(true);return;
+      const sessionId=String(m.sessionId??'');stop();liveSession=sessionId;liveShownAt=0;video=findVideo();const run=generation;
+      void (async()=>{
+        await ensureLayout();if(run!==generation||liveSession!==sessionId){respond(true);return;}
+        status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:layout.showOriginal};overlay();
+        const end=()=>{void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});};
+        if(video){listen(video,'seeking',end);listen(video,'emptied',end);}listen(document,'fullscreenchange',render);
+        timer=setInterval(()=>{if(video&&!video.isConnected){end();stop();return;}render();},250);render();respond(true);
+      })().catch(()=>{try{respond(false);}catch{}});
+      return true;
     }
     if(m.type==='video:live-caption'){
       if(m.sessionId!==liveSession){respond(false);return;}
@@ -221,9 +230,9 @@ function boot(){
       if(!m.partial){liveShownAt=Date.now();status.completed++;}render();respond(true);return;
     }
     if(m.type==='video:stop'){stop();respond(status);return;}
-    if(m.type==='video:display'){status.bilingual=m.bilingual!==false;render();respond(status);return;}
+    if(m.type==='video:display'){layoutEpoch++;const showOriginal=m.bilingual!==false;useLayout({...layout,showOriginal});if(pendingLayout)pendingLayout={...pendingLayout,showOriginal};render();respond(status);return;}
     if(m.type==='video:retry'){lastError='';for(const e of entries.values())if(e.state==='failed')e.state='pending';tick();respond(status);return;}
-    if(m.type==='video:start'){void start(m.config,m.bilingual!==false).then(()=>respond(status),error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';respond(status);});return true;}
+    if(m.type==='video:start'){void start(m.config).then(()=>respond(status),error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';respond(status);});return true;}
   });
   window.addEventListener('pagehide',()=>{if(liveSession)void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});stop();});
 }

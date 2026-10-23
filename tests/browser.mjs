@@ -56,6 +56,7 @@ async function step(name,fn){const start=performance.now();await fn();results.pu
 try{
   await step('Configure provider through the actual settings UI',async()=>{
     await ui.locator('#profile-type').selectOption('compatible');await ui.locator('#base-url').fill(origin+'/v1');await ui.locator('#api-key').fill('test-key-not-a-real-secret');await ui.locator('#model').fill('mock-translator');
+    assert.match(await ui.locator('#app-version').innerText(),/VERSION 0\.7\.0/);
     await ui.locator('#settings-form').evaluate(form=>form.requestSubmit());await until(async()=>await ui.locator('#feedback').textContent()==='设置已保存。');
     const settings=await rpc('settings:get');assert.equal(settings.profiles[0].baseUrl,origin+'/v1');
     await activate();await popup.reload();await ui.screenshot({path:'artifacts/settings-light.png',fullPage:true});await popup.setViewportSize({width:360,height:640});await popup.screenshot({path:'artifacts/popup-light.png'});
@@ -179,7 +180,7 @@ try{
     const data={loadedChars,sourceChars:(await status()).chars,durationMs,firstTranslationMs:Math.round(firstTranslationMs),baselineHeapBytes:Math.round(baseline.JSHeapUsedSize),translatedHeapBytes:Math.round(after.JSHeapUsedSize),heapDeltaBytes:Math.round(after.JSHeapUsedSize-baseline.JSHeapUsedSize),longTasks:tasks,maxLongTaskMs:Math.round(Math.max(0,...tasks)),requests:requests.length-before};
     await writeFile('artifacts/performance.json',JSON.stringify(data,null,2));assert.ok((await status()).limited);assert.ok((await status()).chars<=100000);assert.equal(tasks.length,0,'No added main-thread task over 50 ms');assert.ok(data.requests<=40,'Short paragraphs must be batched to control API overhead');await act('restore');await cdp.detach();
   });
-  async function videoAct(action,bilingual=true){await activate();return rpc('video:action',{action,bilingual});}
+  async function videoAct(action,bilingual){await activate();return rpc('video:action',{action,...(typeof bilingual==='boolean'?{bilingual}:{})});}
   async function captionText(){const session=await context.newCDPSession(page);try{const tree=await session.send('Accessibility.getFullAXTree');return tree.nodes.filter(n=>n.role?.value==='StaticText').map(n=>n.name?.value??'').join('\n');}finally{await session.detach();}}
   async function captionButton(name){const session=await context.newCDPSession(page);try{const tree=await session.send('Accessibility.getFullAXTree'),node=tree.nodes.find(n=>n.role?.value==='button'&&n.name?.value===name);if(!node)return;const {model}=await session.send('DOM.getBoxModel',{backendNodeId:node.backendDOMNodeId});return {x:(model.content[0]+model.content[2])/2,y:(model.content[1]+model.content[5])/2};}finally{await session.detach();}}
   const captionHandle=()=>captionButton('拖动字幕位置，方向键可移动');
@@ -245,12 +246,18 @@ try{
     await page.locator('video').evaluate(v=>v.currentTime=6);await until(async()=> (await captionText()).includes('译：Second subtitle.'));
     await page.locator('video').evaluate(v=>{v.playbackRate=2;v.pause();});const stable=await captionText();await new Promise(resolve=>setTimeout(resolve,350));assert.equal(await captionText(),stable);
     await videoAct('display',false);await until(async()=>!(await captionText()).split('\n').includes('Second subtitle.'));
+    assert.equal((await rpc('caption:get')).showOriginal,false);
+    await until(async()=>!(await ui.locator('#caption-original').isChecked())&&!(await popup.locator('#video-bilingual').isChecked()));
+    await ui.locator('#caption-original').setChecked(true);await until(async()=>(await captionText()).split('\n').includes('Second subtitle.'));
+    await ui.locator('#caption-original').setChecked(false);await until(async()=>!(await captionText()).split('\n').includes('Second subtitle.'));
     const before=requests.length;await page.locator('video').evaluate(v=>v.currentTime=1);await until(async()=> (await captionText()).includes('你好，世界。'));assert.equal(requests.length,before);
     await page.locator('video').evaluate(v=>v.currentTime=61);await until(async()=> (await captionText()).includes('译：A late subtitle.'));
     assert.ok(!((await captionText()).includes('你好，世界。')));
     await videoAct('stop');assert.equal(await page.locator('[data-si-owned=video]').count(),0);assert.equal(await page.locator('video').evaluate(v=>v.textTracks[0].mode),'disabled');
     const stopped=requests.length;await new Promise(resolve=>setTimeout(resolve,350));assert.equal(requests.length,stopped);
-    await videoAct('start');await until(async()=> (await captionText()).includes('译：A late subtitle.'));assert.equal(requests.length,stopped);await videoAct('stop');
+    await videoAct('start');await until(async()=> (await captionText()).includes('译：A late subtitle.'));
+    assert.ok(!(await captionText()).split('\n').includes('A late subtitle.'));assert.equal((await rpc('caption:get')).showOriginal,false);
+    assert.equal(requests.length,stopped);await videoAct('stop');
   });
   await step('Seeking and stopping drop late subtitle responses; failures retain readable source',async()=>{
     await rpc('cache:clear');await page.locator('video').evaluate(v=>{v.playbackRate=1;v.currentTime=1;});delay=500;
@@ -267,10 +274,16 @@ try{
     await until(async()=>!!await captionButton('下一页字幕'));let sawEnd=false;
     for(let i=0;i<20;i++){if((await captionText()).includes('结尾标记')){sawEnd=true;break;}const next=await captionButton('下一页字幕');await page.mouse.click(next.x,next.y);}
     assert.ok(sawEnd);await page.setViewportSize({width:640,height:480});await until(async()=>{const bounds=await page.locator('[data-si-owned=video]').boundingBox();return bounds.x>=0&&bounds.x+bounds.width<=640&&bounds.y>=0&&bounds.y+bounds.height<=480;});
-    await page.screenshot({path:'artifacts/video-long-caption.png'});await page.setViewportSize({width:1280,height:900});await send({type:'video:stop'});await rpc('caption:reset');assert.equal(requests.length,before);
+    await page.screenshot({path:'artifacts/video-long-caption.png'});await page.setViewportSize({width:1280,height:900});
+    await rpc('caption:save',{patch:{showOriginal:false}});
+    await send({type:'video:live-caption',sessionId:'layout-test',preview:true,source:'识别草稿不应出现'});
+    await send({type:'video:live-caption',sessionId:'layout-test',source:'原文不应出现',translation:'只显示译文'});
+    await until(async()=>(await captionText()).includes('只显示译文'));
+    const liveText=await captionText();assert.ok(!liveText.includes('原文不应出现'));assert.ok(!liveText.includes('识别草稿不应出现'));assert.ok(!liveText.split('\n').some(line=>line.startsWith('识别中')));
+    await send({type:'video:stop'});await rpc('caption:reset');assert.equal(requests.length,before);
   });
   await step('Unsupported videos explain missing captions and dynamic player removal releases overlays',async()=>{
-    await page.locator('video').evaluate(v=>v.querySelector('track').remove());const unsupported=await videoAct('start');assert.equal(unsupported.state,'error');assert.match(unsupported.message,/没有可读取的字幕/);assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+    await page.locator('video').evaluate(v=>v.querySelector('track').remove());const unsupported=await videoAct('start');assert.equal(unsupported.state,'error');assert.match(unsupported.message,/没有可读取的字幕/);assert.match(unsupported.message,/开始实时翻译/);assert.doesNotMatch(unsupported.message,/后续版本/);assert.equal(await page.locator('[data-si-owned=video]').count(),0);
     await page.goto(`${origin}/video`);await until(async()=>await page.locator('video').evaluate(v=>Number.isFinite(v.duration)));await videoAct('start');await until(async()=>await page.locator('[data-si-owned=video]').count()===1);
     await page.locator('video').evaluate(v=>v.remove());await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
   });

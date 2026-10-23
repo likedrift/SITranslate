@@ -1,8 +1,13 @@
 import {type Settings,type Profile,type TranslationResult} from '../core/types';
+import type {CaptionLayout} from '../core/caption-layout';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
 import {normalizeSpeech,isStreaming,type SpeechSettings,type SpeechStatus} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[];
+el('app-version').textContent=`VERSION ${chrome.runtime.getManifest().version}`;
+function paintCaptionOriginal(showOriginal:boolean){el<HTMLInputElement>('caption-original').checked=showOriginal;}
+el('caption-original').addEventListener('change',()=>void rpc('caption:save',{patch:{showOriginal:el<HTMLInputElement>('caption-original').checked}}).catch(err=>feedback(err.message,'error')));
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='local'&&changes.captionLayout?.newValue&&typeof changes.captionLayout.newValue.showOriginal==='boolean')paintCaptionOriginal(changes.captionLayout.newValue.showOriginal);});
 const fields=['profile-name','base-url','api-key','model','input-price','output-price'];
 function feedback(text:string,state=''){el('feedback').textContent=text;el('feedback').className=state;}
 function capture(){
@@ -61,6 +66,7 @@ async function init(){settings=await rpc<Settings>('settings:get');editing=setti
   languageOptions(el<HTMLSelectElement>('target'));el<HTMLSelectElement>('target').value=settings.target;el<HTMLSelectElement>('display').value=settings.display;el<HTMLSelectElement>('max-chars').value=String(settings.maxPageChars);
   el<HTMLInputElement>('dynamic').checked=settings.dynamic;el<HTMLInputElement>('include-context').checked=settings.includeContext;el<HTMLInputElement>('cache-enabled').checked=settings.cacheEnabled;
   fillProfile();origins=await rpc<string[]>('selection:origins');renderOrigins();await refreshUsage();
+  paintCaptionOriginal((await rpc<CaptionLayout>('caption:get')).showOriginal);
 }
 void init().catch(err=>feedback(err.message,'error'));
 async function saveSpeech(test=false){
