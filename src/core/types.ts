@@ -35,6 +35,7 @@ export interface PageStatus {
   limited: boolean; message: string; display: DisplayMode;
 }
 export interface VideoStatus {state:'idle'|'loading'|'active'|'stopped'|'error';source:string;completed:number;message:string;bilingual:boolean}
+export const NO_VIDEO_CAPTION_MESSAGE='这个视频没有可读取的字幕。请打开工具栏弹窗，点击「开始实时翻译」。';
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
   profiles: [{ id: 'deepseek-default', name: 'DeepSeek', type: 'deepseek',

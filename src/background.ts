@@ -5,7 +5,7 @@ import {adapterFor,ProviderError} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
-import {DEFAULT_CAPTION,validateCaption,type CaptionLayout} from './core/caption-layout';
+import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
 import {streamSegment} from './core/stream-text';
 
 const scheduler=new Scheduler(2),cache=new TranslationCache();
@@ -31,10 +31,13 @@ const initialized=(async()=>{
   await write({jobHistory:history});
   const selectionDefaults=await chrome.storage.local.get('selectionDefaultsVersion');
   if(selectionDefaults.selectionDefaultsVersion!==1)await chrome.storage.local.set({selectionDefaultsVersion:1,selectionOrigins:['https://*/*','http://*/*']});
+  const storedCaption=(await chrome.storage.local.get('captionLayout')).captionLayout;
+  const migratedCaption=migrateCaption(storedCaption);
+  if(migratedCaption)await chrome.storage.local.set({captionLayout:migratedCaption});
 })();
 const trusted=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && !!sender.url?.startsWith(chrome.runtime.getURL(''));
 let captionWrites=Promise.resolve<unknown>(undefined);
-async function captionLayout():Promise<CaptionLayout>{const s=(await chrome.storage.local.get('captionLayout')).captionLayout;try{validateCaption(s);return s;}catch{return structuredClone(DEFAULT_CAPTION);}}
+async function captionLayout():Promise<CaptionLayout>{return normalizeCaption((await chrome.storage.local.get('captionLayout')).captionLayout);}
 function saveCaption(patch:Partial<CaptionLayout>,reset=false){const next=captionWrites.catch(()=>{}).then(async()=>{const s=reset?structuredClone(DEFAULT_CAPTION):{...await captionLayout(),...patch};validateCaption(s);await chrome.storage.local.set({captionLayout:s});const tabs=await chrome.tabs.query({});await Promise.all(tabs.filter(t=>t.id!==undefined&&/^https?:\/\//.test(t.url??'')).map(t=>chrome.tabs.sendMessage(t.id!,{type:'video:layout',layout:s},{frameId:0}).catch(()=>{})));return s;});captionWrites=next;return next;}
 const speech=createSpeechController({ready:initialized,config:safeConfig,translate:async(input,tabId,observer)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url},observer);},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
 const pageSender=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && sender.tab?.id!==undefined && /^https?:\/\//.test(sender.url??'');
@@ -193,7 +196,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     case 'video:action':{
       if(!['start','stop','display','retry'].includes(message.action))throw new Error('不支持的视频操作。');
       if(message.action==='start'||message.action==='stop')await speech.route({type:'speech:stop'},sender);
-      if(message.action==='display')await saveCaption({showOriginal:message.bilingual!==false});
+      if(message.action==='display'||(message.action==='start'&&typeof message.bilingual==='boolean'))await saveCaption({showOriginal:message.bilingual!==false});
       const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
       const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
       return chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
