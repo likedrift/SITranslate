@@ -27,7 +27,7 @@ function icon(size) {
     const inside=dx*dx+dy*dy<=radius*radius;
     const stroke=(u>.25&&u<.75&&v>.27&&v<.36)||(u>.455&&u<.545&&v>.3&&v<.74);
     const i=y*(size*4+1)+1+x*4;
-    data.set(stroke?[255,255,255,255]:[68,82,168,inside?255:0],i);
+    data.set(stroke?[255,255,255,255]:[11,87,208,inside?255:0],i);
   }
   const header=Buffer.alloc(13); header.writeUInt32BE(size);header.writeUInt32BE(size,4);header[8]=8;header[9]=6;
   return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(data)),chunk('IEND',Buffer.alloc(0))]);

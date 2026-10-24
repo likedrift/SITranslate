@@ -1,16 +1,124 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>思译</title><link rel="stylesheet" href="/src/ui/style.css"></head>
-<body class="popup"><main>
-  <header class="brand"><span class="brand-mark" aria-hidden="true">译</span><div><h1>思译 <span class="brand-en">Si Translate</span></h1><p>让语言不再打断阅读</p></div><button class="icon-button" id="settings" title="打开设置" aria-label="打开设置">⚙</button></header>
-  <div class="popup-fields"><label>翻译为<select id="target"></select></label><label>使用模型<select id="profile"></select></label></div>
-  <fieldset class="segmented"><legend class="sr-only">显示方式</legend><label><input type="radio" name="display" value="replace" checked><span>译文</span></label><label><input type="radio" name="display" value="bilingual"><span>双语对照</span></label></fieldset>
-  <button class="primary translate-button" id="translate"><span aria-hidden="true">文 ⇄ A</span> 翻译此页</button>
-  <section class="progress-card" aria-live="polite"><div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div><progress id="progress" value="0" max="1" aria-label="页面翻译进度"></progress><p id="detail">翻译当前页面，保留链接与格式。</p></section>
-  <div class="row actions"><button class="secondary" id="stop" disabled>停止</button><button class="secondary" id="restore">恢复原文</button><button class="text-button" id="retry" hidden>重试失败部分</button></div>
-  <p class="notice" id="error" role="alert" hidden></p>
-  <section class="video-help"><strong>直播实时语音翻译</strong><p id="speech-state" class="muted" aria-live="polite">日语音频 → 中文字幕，无需网站字幕。</p><p id="speech-timing" class="muted" hidden></p><p id="speech-usage" class="muted" hidden></p><div class="row"><button type="button" class="secondary" id="speech-start">开始实时翻译</button><button type="button" class="text-button" id="speech-stop" disabled>停止音频</button></div><button type="button" class="text-button compact" id="speech-settings">配置百炼语音 Key</button></section>
-  <section class="video-help"><strong>视频字幕翻译</strong><p id="video-state" class="muted" aria-live="polite">有字幕的视频可开启翻译。</p><div class="row"><button class="secondary" id="video-start" disabled>正在读取字幕状态…</button><button class="text-button" id="video-stop" disabled>停止</button><button class="text-button" id="video-retry" hidden>重试</button></div><label class="video-check"><input type="checkbox" id="video-bilingual" checked> 同时显示原文</label></section>
-  <details class="video-help"><summary>字幕位置与显示</summary><p class="muted">拖动字幕条移动，四角缩放；普通与全屏分别记忆。宽度滑块会重置手动尺寸。</p><label>实时字幕节奏<select id="caption-reading"><option value="balanced">阅读优先 · 短暂保留当前句</option><option value="live">实时优先 · 立即显示新句</option></select></label><label>字幕范围<select id="caption-mode"><option value="video">视频内</option><option value="screen">整个页面</option></select></label><label>字号 <output id="caption-font-label"></output><input type="range" id="caption-font" min="14" max="40"></label><label>宽度 <output id="caption-width-label"></output><input type="range" id="caption-width" min="35" max="95"></label><label>背景不透明度 <output id="caption-opacity-label"></output><input type="range" id="caption-opacity" min="10" max="100"></label><label class="video-check"><input type="checkbox" id="caption-lock"> 锁定字幕位置和尺寸</label><button class="text-button" id="caption-reset">恢复默认位置与显示</button></details>
-  <details id="speech-diagnostics" class="video-help"><summary>本地延迟诊断</summary><p class="muted">仅保留本次浏览会话最近 100 段数字耗时，不记录文字、音频、Key 或网址。识别和上屏耗时为估算，不包含 YouTube 播放器延迟。</p><pre id="speech-diagnostics-text" class="diagnostics-text">等待样本。</pre><div class="row"><button id="speech-diagnostics-export" class="text-button">导出诊断</button><button id="speech-diagnostics-clear" class="text-button">清除记录</button></div></details><div class="selection-help"><span class="small-icon" aria-hidden="true">⌁</span><div><strong>只想翻译一句？</strong><p>选中文字，再点击浮动的“译”按钮。</p><button class="text-button compact" id="grant-site" disabled>正在读取划词状态…</button></div></div>
-  <footer><span>仅在你点击后发送文字</span><kbd>Alt ⇧ T</kbd></footer>
-</main><script type="module" src="/src/ui/popup.ts"></script></body></html>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>思译</title>
+  <link rel="stylesheet" href="/src/ui/style.css">
+</head>
+<body class="popup">
+<main>
+  <header class="brand">
+    <span class="brand-mark" aria-hidden="true">译</span>
+    <h1>思译</h1>
+    <button class="icon-button" id="settings" type="button" title="打开设置" aria-label="打开设置">
+      <svg width="20" height="20" viewBox="0 0 24 24" aria-hidden="true" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round">
+        <circle cx="12" cy="12" r="3"></circle>
+        <path d="M12 3v2M12 19v2M3 12h2M19 12h2M5.6 5.6l1.4 1.4M17 17l1.4 1.4M18.4 5.6 17 7M7 17l-1.4 1.4"></path>
+      </svg>
+    </button>
+  </header>
+
+  <section class="primary-block">
+    <div class="popup-fields">
+      <label>翻译为<select id="target"></select></label>
+      <label>使用模型<select id="profile"></select></label>
+    </div>
+    <fieldset class="segmented">
+      <legend class="sr-only">显示方式</legend>
+      <label><input type="radio" name="display" value="replace" checked><span>译文</span></label>
+      <label><input type="radio" name="display" value="bilingual"><span>双语对照</span></label>
+    </fieldset>
+    <button class="primary translate-button" id="translate" type="button">翻译此页</button>
+    <section class="progress-card" aria-live="polite">
+      <div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div>
+      <progress id="progress" value="0" max="1" aria-label="页面翻译进度"></progress>
+      <p id="detail" hidden></p>
+    </section>
+    <div class="row actions">
+      <button class="secondary" id="stop" type="button" disabled>停止</button>
+      <button class="secondary" id="restore" type="button">恢复原文</button>
+      <button class="text-button" id="retry" type="button" hidden>重试失败部分</button>
+    </div>
+    <p class="notice" id="error" role="alert" hidden></p>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head">
+      <h2>实时语音</h2>
+      <button class="text-button compact" id="speech-settings" type="button">语音设置</button>
+    </div>
+    <p id="speech-state" class="status" aria-live="polite">未开始</p>
+    <p id="speech-timing" class="status" hidden></p>
+    <p id="speech-usage" class="status" hidden></p>
+    <div class="row">
+      <button class="secondary" id="speech-start" type="button">开始实时翻译</button>
+      <button class="text-button" id="speech-stop" type="button" disabled>停止音频</button>
+    </div>
+  </section>
+
+  <section class="panel">
+    <div class="panel-head"><h2>视频字幕</h2></div>
+    <p id="video-state" class="status" aria-live="polite">正在读取字幕状态…</p>
+    <div class="row">
+      <button class="secondary" id="video-start" type="button" disabled>正在读取字幕状态…</button>
+      <button class="text-button" id="video-stop" type="button" disabled>停止</button>
+      <button class="text-button" id="video-retry" type="button" hidden>重试</button>
+    </div>
+    <label class="switch-row">
+      <span class="switch-text">同时显示原文</span>
+      <span class="switch">
+        <input id="video-bilingual" type="checkbox" role="switch" checked>
+        <span class="switch-ui" aria-hidden="true"></span>
+      </span>
+    </label>
+  </section>
+
+  <details class="fold">
+    <summary>字幕位置与显示</summary>
+    <p class="status">拖动字幕移动，四角缩放。宽度会清除手动尺寸。</p>
+    <label>实时字幕节奏
+      <select id="caption-reading">
+        <option value="balanced">阅读优先</option>
+        <option value="live">实时优先</option>
+      </select>
+    </label>
+    <label>字幕范围
+      <select id="caption-mode">
+        <option value="video">视频内</option>
+        <option value="screen">整个页面</option>
+      </select>
+    </label>
+    <label>字号 <output id="caption-font-label"></output><input type="range" id="caption-font" min="14" max="40"></label>
+    <label>宽度 <output id="caption-width-label"></output><input type="range" id="caption-width" min="35" max="95"></label>
+    <label>背景不透明度 <output id="caption-opacity-label"></output><input type="range" id="caption-opacity" min="10" max="100"></label>
+    <label class="switch-row">
+      <span class="switch-text">锁定位置和尺寸</span>
+      <span class="switch">
+        <input id="caption-lock" type="checkbox" role="switch">
+        <span class="switch-ui" aria-hidden="true"></span>
+      </span>
+    </label>
+    <button class="text-button" id="caption-reset" type="button">恢复默认位置与显示</button>
+  </details>
+
+  <details id="speech-diagnostics" class="fold">
+    <summary>本地延迟诊断</summary>
+    <pre id="speech-diagnostics-text" class="diagnostics-text">等待样本。</pre>
+    <div class="row">
+      <button id="speech-diagnostics-export" class="text-button" type="button">导出诊断</button>
+      <button id="speech-diagnostics-clear" class="text-button" type="button">清除记录</button>
+    </div>
+  </details>
+
+  <details class="fold">
+    <summary>划词</summary>
+    <p class="status">选中文字后，再点页面上的「译」。</p>
+    <button class="text-button" id="grant-site" type="button" disabled>正在读取划词状态…</button>
+  </details>
+
+  <footer><span>点击后才发送文字</span><kbd>Alt ⇧ T</kbd></footer>
+</main>
+<script type="module" src="/src/ui/popup.ts"></script>
+</body>
+</html>

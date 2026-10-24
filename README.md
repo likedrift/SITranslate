@@ -48,7 +48,7 @@ DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与
 
 1. 用 `si-translate-v0.7.0.zip` 的内容覆盖原扩展目录，在 `chrome://extensions` 点击思译「重新加载」。从 0.2.0 或更早版本升级会新增标签页音频、隐藏音频处理页及限定语音服务的 WebSocket 访问权限；若 Chrome 暂停扩展，需要允许更新权限后再刷新 YouTube。不要卸载旧扩展，以保留配置。
 2. 保留现有文字翻译配置（DeepSeek 或兼容服务），目标选择「简体中文」。建议关闭推理，并先用「保存并测试连接」确认文字服务可用。
-3. 点击弹窗「配置百炼语音 Key」，在「实时语音」填写自己的百炼 Key，默认模型 `qwen3-asr-flash-realtime`，直播语言「日语」。语音 Key 和文字模型 Key 分开保存。
+3. 点击弹窗「语音设置」，在「实时语音」填写自己的百炼 Key，默认模型 `qwen3-asr-flash-realtime`，直播语言「日语」。语音 Key 和文字模型 Key 分开保存。
 4. 默认北京地址 `wss://dashscope.aliyuncs.com/api-ws/v1/realtime`。若 Key 在新加坡创建，改为 `wss://dashscope-intl.aliyuncs.com/api-ws/v1/realtime`；业务空间专用域名也可配置。Key 地域、模型开通和余额必须匹配。
 5. 可在术语框填写日语人物名、节目名、作品名。点击「保存并测试语音连接」，成功表示握手与会话配置通过，不代表已识别真实日语。测试及修改配置会停止正在运行的音频翻译。
 6. 今天先播放一段日语视频试用，检查声音、字幕和延迟，再用于直播。
