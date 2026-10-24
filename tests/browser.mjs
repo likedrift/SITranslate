@@ -66,11 +66,11 @@ try{
   });
   await step('Settings nav follows the visible section, switches reload from storage, and speech save stays separate',async()=>{
     await ui.evaluate(()=>window.scrollTo(0,0));
-    await until(async()=>await ui.locator('a[href="#providers"]').evaluate(el=>el.classList.contains('active')));
-    await ui.locator('a[href="#speech"]').click();
-    await until(async()=>await ui.locator('a[href="#speech"]').evaluate(el=>el.classList.contains('active')));
+    await until(async()=>await ui.locator('a.nav-link[href="#providers"]').evaluate(el=>el.classList.contains('active')));
+    await ui.locator('a.nav-link[href="#speech"]').click();
+    await until(async()=>await ui.locator('a.nav-link[href="#speech"]').evaluate(el=>el.classList.contains('active')));
     const navPaint=await ui.evaluate(()=>{
-      const providers=document.querySelector('a[href="#providers"]'),speech=document.querySelector('a[href="#speech"]');
+      const providers=document.querySelector('a.nav-link[href="#providers"]'),speech=document.querySelector('a.nav-link[href="#speech"]');
       return {providersActive:providers.classList.contains('active'),speechActive:speech.classList.contains('active'),providers:getComputedStyle(providers).backgroundColor,speech:getComputedStyle(speech).backgroundColor};
     });
     assert.equal(navPaint.providersActive,false);assert.equal(navPaint.speechActive,true);assert.notEqual(navPaint.providers,navPaint.speech);

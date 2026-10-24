@@ -63,18 +63,16 @@ el('settings-form').addEventListener('submit',event=>{
   el<HTMLButtonElement>('save').disabled=true;el<HTMLButtonElement>('test').disabled=true;
   saved.catch(err=>feedback(err.message,'error')).finally(()=>{el<HTMLButtonElement>('save').disabled=false;el<HTMLButtonElement>('test').disabled=false;});
 });
-el('settings-form').addEventListener('input',event=>{
+function onSettingsEdit(event:Event){
   if(!ready)return;
   const id=(event.target as HTMLElement).id;
-  if(id==='caption-original'||id==='is-active')return;
+  if(!id||id==='caption-original'||id==='is-active'||id==='profile-list')return;
   markDirty();
-});
-el('settings-form').addEventListener('change',event=>{
-  if(!ready)return;
-  const id=(event.target as HTMLElement).id;
-  if(id==='caption-original'||id==='profile-list'||id==='is-active')return;
-  markDirty();
-});
+}
+el('settings-form').addEventListener('input',onSettingsEdit);
+el('settings-form').addEventListener('change',onSettingsEdit);
+el('reading').addEventListener('input',onSettingsEdit);
+el('reading').addEventListener('change',onSettingsEdit);
 el('profile-list').addEventListener('change',()=>{if(!settings)return;capture();editing=value('profile-list');fillProfile();});
 el('profile-type').addEventListener('change',()=>{el('thinking-row').hidden=value('profile-type')!=='deepseek';});
 el('is-active').addEventListener('change',()=>{

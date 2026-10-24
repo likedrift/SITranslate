@@ -70,34 +70,6 @@
           <span id="test-result" class="field-status" role="status"></span>
         </div>
       </section>
-
-      <section class="card" id="reading">
-        <div class="section-heading"><h2>阅读偏好</h2></div>
-        <div class="form-grid">
-          <label>目标语言<select id="target"></select></label>
-          <label>默认显示
-            <select id="display">
-              <option value="replace">替换原文</option>
-              <option value="bilingual">双语对照</option>
-            </select>
-          </label>
-          <label class="wide">单页文字上限
-            <select id="max-chars">
-              <option value="50000">50,000 字符</option>
-              <option value="100000">100,000 字符</option>
-              <option value="200000">200,000 字符</option>
-              <option value="500000">500,000 字符</option>
-            </select>
-          </label>
-        </div>
-        <div class="switch-list">
-          <label class="switch-row"><span class="switch-text">翻译动态新增内容</span><span class="switch"><input id="dynamic" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row"><span class="switch-text">划词附带段落上下文</span><span class="switch"><input id="include-context" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row"><span class="switch-text">复用本次会话译文</span><span class="switch"><input id="cache-enabled" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row"><span class="switch-text">字幕同时显示原文</span><span class="switch"><input id="caption-original" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-        </div>
-        <p id="reading-feedback" class="field-status" role="status"></p>
-      </section>
     </form>
 
     <section class="card" id="speech">
@@ -143,6 +115,34 @@
         <p id="speech-feedback" class="field-status" role="status"></p>
         <p class="field-status">开始后才采集标签页声音，不使用麦克风。暂停视频不会断开连接。</p>
       </form>
+    </section>
+
+    <section class="card" id="reading">
+      <div class="section-heading"><h2>阅读偏好</h2></div>
+      <div class="form-grid">
+        <label>目标语言<select id="target" form="settings-form"></select></label>
+        <label>默认显示
+          <select id="display" form="settings-form">
+            <option value="replace">替换原文</option>
+            <option value="bilingual">双语对照</option>
+          </select>
+        </label>
+        <label class="wide">单页文字上限
+          <select id="max-chars" form="settings-form">
+            <option value="50000">50,000 字符</option>
+            <option value="100000">100,000 字符</option>
+            <option value="200000">200,000 字符</option>
+            <option value="500000">500,000 字符</option>
+          </select>
+        </label>
+      </div>
+      <div class="switch-list">
+        <label class="switch-row"><span class="switch-text">翻译动态新增内容</span><span class="switch"><input id="dynamic" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">划词附带段落上下文</span><span class="switch"><input id="include-context" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">复用本次会话译文</span><span class="switch"><input id="cache-enabled" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">字幕同时显示原文</span><span class="switch"><input id="caption-original" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+      </div>
+      <p id="reading-feedback" class="field-status" role="status"></p>
     </section>
 
     <section class="card" id="selection">
