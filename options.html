@@ -1,44 +1,184 @@
 <!doctype html>
-<html lang="zh-Hans"><head><meta charset="UTF-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>思译 · 设置</title><link rel="stylesheet" href="/src/ui/style.css"></head>
-<body class="options"><div class="settings-shell">
-  <aside><a class="brand brand-link" href="#"><span class="brand-mark" aria-hidden="true">译</span><div><h1>思译</h1><p>Si Translate</p></div></a><nav aria-label="设置导航"><a href="#providers" class="nav-link">模型服务</a><a href="#speech" class="nav-link">实时语音</a><a href="#reading" class="nav-link">阅读偏好</a><a href="#selection" class="nav-link">划词与网站</a><a href="#data" class="nav-link">用量与数据</a></nav><div class="aside-note">你的文字，<br>由你选择的模型翻译。<span id="app-version">VERSION 0.7.0</span></div></aside>
-  <main><header class="page-heading"><div class="eyebrow">MAKE READING FLOW</div><h1>按你的方式阅读世界</h1><p>连接模型、选择语言，剩下的交给思译。</p></header>
-    <form id="settings-form">
-      <section class="card" id="providers"><div class="section-heading"><div><h2>模型服务</h2><p>使用自己的 API Key，直接连接服务商。</p></div><span class="chip">自带密钥</span></div>
-        <div class="provider-toolbar"><label class="grow">服务配置<select id="profile-list"></select></label><button class="secondary" type="button" id="add-profile">＋ 添加</button><button class="text-button danger" type="button" id="delete-profile">删除</button></div>
-        <div class="form-grid"><label>配置名称<input id="profile-name" maxlength="80" required placeholder="例如：日常翻译"></label><label>接口类型<select id="profile-type"><option value="deepseek">DeepSeek</option><option value="compatible">通用兼容接口</option></select></label>
-          <label class="wide">API 服务地址<input id="base-url" type="url" required placeholder="https://api.deepseek.com"><small>可填写基础地址或完整的 /chat/completions 地址。</small></label>
-          <label class="wide">API Key<div class="input-action"><input id="api-key" type="password" autocomplete="off" maxlength="512" placeholder="输入你的 API Key"><button class="text-button" type="button" id="toggle-key" aria-label="显示 API Key">显示</button></div></label>
-          <label class="wide">模型名称<input id="model" required maxlength="120" placeholder="填写服务商支持的模型名称"><small>可随时更换模型；以服务商当前支持的名称为准。</small></label>
+<html lang="zh-Hans">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1">
+  <title>思译 · 设置</title>
+  <link rel="stylesheet" href="/src/ui/style.css">
+</head>
+<body class="options">
+<div class="settings-shell">
+  <aside>
+    <a class="brand brand-link" href="#providers">
+      <span class="brand-mark" aria-hidden="true">译</span>
+      <h1>思译</h1>
+    </a>
+    <nav aria-label="设置导航">
+      <a href="#providers" class="nav-link">模型服务</a>
+      <a href="#speech" class="nav-link">实时语音</a>
+      <a href="#reading" class="nav-link">阅读偏好</a>
+      <a href="#selection" class="nav-link">划词与网站</a>
+      <a href="#data" class="nav-link">用量与数据</a>
+    </nav>
+    <p class="version" id="app-version">VERSION 0.7.0</p>
+  </aside>
+  <main>
+    <header class="page-heading"><h1>设置</h1></header>
+    <form id="settings-form" novalidate>
+      <section class="card" id="providers">
+        <div class="section-heading"><h2>模型服务</h2></div>
+        <div class="provider-toolbar">
+          <label class="grow">服务配置<select id="profile-list"></select></label>
+          <button class="secondary" type="button" id="add-profile">添加</button>
+          <button class="text-button danger" type="button" id="delete-profile" disabled>删除</button>
         </div>
-        <div class="switch-list"><label><div><strong>设为默认服务</strong><small>整页与划词翻译使用此配置。</small></div><input id="is-active" type="checkbox" role="switch"></label><label><div><strong>流式响应</strong><small>支持时逐步显示划词译文。</small></div><input id="stream" type="checkbox" role="switch"></label><label><div><strong>JSON 输出模式</strong><small>仅在服务商明确支持时开启。</small></div><input id="json-mode" type="checkbox" role="switch"></label><label id="thinking-row"><div><strong>关闭推理</strong><small>DeepSeek 翻译优先速度与成本。</small></div><input id="disable-thinking" type="checkbox" role="switch"></label></div>
-        <details><summary>费用估算（可选）</summary><p class="muted">填写每百万 Token 的美元单价。留空或 0 表示不估算；实际费用以服务商账单为准。</p><div class="form-grid"><label>输入单价（USD）<input type="number" min="0" max="10000" step="any" id="input-price"></label><label>输出单价（USD）<input type="number" min="0" max="10000" step="any" id="output-price"></label></div></details>
-        <div class="row"><button type="button" class="secondary" id="test">保存并测试连接</button><span id="test-result" class="muted" role="status"></span></div>
+        <div class="form-grid">
+          <label>配置名称<input id="profile-name" maxlength="80" placeholder="例如：日常翻译"></label>
+          <label>接口类型
+            <select id="profile-type">
+              <option value="deepseek">DeepSeek</option>
+              <option value="compatible">通用兼容接口</option>
+            </select>
+          </label>
+          <label class="wide">API 服务地址
+            <input id="base-url" type="url" placeholder="https://api.deepseek.com">
+            <small>基础地址，或完整的 /chat/completions 地址。</small>
+          </label>
+          <label class="wide">API Key
+            <span class="input-action">
+              <input id="api-key" type="password" autocomplete="off" maxlength="512" placeholder="API Key">
+              <button class="text-button" type="button" id="toggle-key" aria-label="显示 API Key">显示</button>
+            </span>
+          </label>
+          <label class="wide">模型名称<input id="model" maxlength="120" placeholder="服务商支持的模型名称"></label>
+        </div>
+        <div class="switch-list">
+          <label class="switch-row"><span class="switch-text">设为默认服务</span><span class="switch"><input id="is-active" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row"><span class="switch-text">流式响应</span><span class="switch"><input id="stream" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row" title="仅在服务商支持时开启"><span class="switch-text">JSON 模式</span><span class="switch"><input id="json-mode" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row" id="thinking-row"><span class="switch-text">关闭推理</span><span class="switch"><input id="disable-thinking" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        </div>
+        <details class="cost">
+          <summary>费用估算</summary>
+          <div class="form-grid">
+            <label>输入单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="input-price" placeholder="0 表示不估算"></label>
+            <label>输出单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="output-price" placeholder="0 表示不估算"></label>
+          </div>
+        </details>
+        <div class="row">
+          <button type="button" class="secondary" id="test">保存并测试连接</button>
+          <span id="test-result" class="field-status" role="status"></span>
+        </div>
       </section>
-      <section class="card" id="speech"><div class="section-heading"><div><h2>实时语音</h2><p>无网站字幕也可识别日语直播。音频直连百炼，文字使用上方翻译模型。</p></div></div>
-        <div class="form-grid"><label class="wide">百炼语音 API Key<input id="speech-key" type="password" autocomplete="off" maxlength="512" placeholder="填写百炼 Key，与文字翻译 Key 分开保存"></label>
-          <label>识别模型<input id="speech-model" list="speech-models" maxlength="100" value="qwen3-asr-flash-realtime"><datalist id="speech-models"><option value="qwen3-asr-flash-realtime">原版 · 已有配置继续使用</option><option value="qwen-audio-3.1-asr-flash-streaming">3.1 Streaming · 持续转写</option></datalist></label><label>直播语言<select id="speech-language"><option value="ja">日语</option><option value="auto">自动识别</option><option value="en">英语</option><option value="zh">中文</option></select></label>
-          <label>服务地域<select id="speech-region"><option value="cn-beijing">北京</option><option value="ap-southeast-1">新加坡</option></select></label><label>业务空间 Workspace ID<input id="speech-workspace" maxlength="100" placeholder="3.1 Streaming 必填"><small>从百炼对应地域的业务空间详情复制，与 API Key 匹配。</small></label>
-          <label class="wide">语音服务地址<input id="speech-endpoint" type="url" placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/realtime"><small id="speech-address-help">选择模型、地域并填写 Workspace ID 后自动生成，也可粘贴完整地址。</small></label>
-          <label class="wide">人物、作品与术语（可选）<textarea id="speech-context" rows="3" maxlength="2000" placeholder="填写日语人名、节目名等，帮助识别专有名词。"></textarea><small id="speech-context-help">原版最多 2000 字；3.1 Streaming 最多 400 字。</small></label></div>
-        <div class="row"><button type="button" id="speech-save" class="secondary">保存语音配置</button><button type="button" id="speech-test" class="text-button">保存并测试语音连接</button></div><p id="speech-feedback" class="muted" role="status"></p>
-        <p class="muted small">只有点击开始后才采集标签页声音，不采集麦克风。语音识别与文字翻译分别计费；暂停视频不会自动停止语音连接，观看结束请点停止。</p>
-      </section>
-      <section class="card" id="reading"><div class="section-heading"><div><h2>阅读偏好</h2><p>整页翻译先处理当前屏幕，再继续处理其余内容。</p></div></div>
-        <div class="form-grid"><label>目标语言<select id="target"></select></label><label>默认显示<select id="display"><option value="replace">译文 · 替换原文</option><option value="bilingual">双语 · 原文后附译文</option></select></label><label class="wide">单页文字上限<select id="max-chars"><option value="50000">50,000 字符 · 较省费用</option><option value="100000">100,000 字符 · 推荐</option><option value="200000">200,000 字符</option><option value="500000">500,000 字符 · 超长页面</option></select><small>达到上限后停止增加新内容；已发出的请求仍可能计费。</small></label></div>
-        <div class="switch-list"><label><div><strong>翻译动态新增内容</strong><small>仅在本页已开始翻译后生效；不会自动滚动加载。</small></div><input id="dynamic" type="checkbox" role="switch"></label><label><div><strong>划词附带段落上下文</strong><small>点击翻译时同时发送所在段落，帮助理解歧义。</small></div><input id="include-context" type="checkbox" role="switch"></label><label><div><strong>复用本次浏览会话的译文</strong><small>有容量上限，浏览器重启后清除。</small></div><input id="cache-enabled" type="checkbox" role="switch"></label><label><div><strong>视频与实时字幕同时显示原文</strong><small>与工具栏弹窗中的「同时显示原文」共用。</small></div><input id="caption-original" type="checkbox" role="switch"></label></div>
-      </section>
-      <section class="card" id="selection"><div class="section-heading"><div><h2>划词与网站</h2><p>选中只显示按钮，点击才发送文字。</p></div></div>
-        <p class="muted">默认在所有普通网站开启划词。可移除下方范围，改为只在指定网站启用。选中文字不会发送请求。</p>
-        <div class="site-form"><input id="site-url" type="url" placeholder="https://example.com" aria-label="网站地址"><button type="button" class="secondary" id="add-site">添加网站</button></div>
-        <ul id="site-list" class="site-list"></ul><button type="button" class="text-button" id="all-sites">在所有普通网站开启划词</button><p class="muted small">授权后请刷新已打开的网页。移除网站会停止后续自动加载；已打开页面请刷新。</p>
-      </section>
-      <section class="card" id="data"><div class="section-heading"><div><h2>用量与数据</h2><p>没有中转服务器，没有遥测。</p></div></div>
-        <div class="stats"><div><span id="usage-requests">0</span><small>成功请求</small></div><div><span id="usage-tokens">0</span><small>API 报告的 Token</small></div><div><span id="usage-cost">—</span><small>估算费用 USD</small></div></div>
-        <p id="cache-summary" class="muted"></p><div class="row"><button type="button" class="secondary" id="clear-cache">清除译文缓存</button><button type="button" class="text-button" id="clear-usage">重置统计</button></div>
-        <div class="privacy-note">API Key 仅保存在此设备的扩展存储，不同步。翻译文字将发送到你配置的服务商；本机存储不等于硬件级密钥保护。用量只统计收到有效译文的请求，服务商可能对失败或取消的请求计费。</div>
-      </section>
-      <div class="save-bar"><p id="feedback" role="status">设置只保存在此设备。</p><button class="primary" type="submit" id="save">保存设置</button></div>
-    </form><footer class="options-footer">思译 · 少一点打断，多一点理解。</footer>
+    </form>
+
+    <section class="card" id="speech">
+      <form id="speech-form" novalidate>
+        <div class="section-heading"><h2>实时语音</h2></div>
+        <div class="form-grid">
+          <label class="wide">百炼语音 API Key<input id="speech-key" type="password" autocomplete="off" maxlength="512" placeholder="与文字翻译 Key 分开保存"></label>
+          <label>识别模型
+            <input id="speech-model" list="speech-models" maxlength="100" value="qwen3-asr-flash-realtime">
+            <datalist id="speech-models">
+              <option value="qwen3-asr-flash-realtime"></option>
+              <option value="qwen-audio-3.1-asr-flash-streaming"></option>
+            </datalist>
+          </label>
+          <label>直播语言
+            <select id="speech-language">
+              <option value="ja">日语</option>
+              <option value="auto">自动识别</option>
+              <option value="en">英语</option>
+              <option value="zh">中文</option>
+            </select>
+          </label>
+          <label>服务地域
+            <select id="speech-region">
+              <option value="cn-beijing">北京</option>
+              <option value="ap-southeast-1">新加坡</option>
+            </select>
+          </label>
+          <label>Workspace ID<input id="speech-workspace" maxlength="100" placeholder="3.1 Streaming 必填"></label>
+          <label class="wide">语音服务地址
+            <input id="speech-endpoint" type="url" placeholder="wss://dashscope.aliyuncs.com/api-ws/v1/realtime">
+            <small id="speech-address-help">选择模型与地域后自动生成，也可粘贴完整地址。</small>
+          </label>
+          <label class="wide">术语（可选）
+            <textarea id="speech-context" rows="3" maxlength="2000" placeholder="日语人名、节目名"></textarea>
+            <small id="speech-context-help">原版最多 2000 字；3.1 Streaming 最多 400 字。</small>
+          </label>
+        </div>
+        <div class="row speech-actions">
+          <button type="submit" id="speech-save" class="secondary">保存语音配置</button>
+          <button type="button" id="speech-test" class="text-button">保存并测试语音连接</button>
+        </div>
+        <p id="speech-feedback" class="field-status" role="status"></p>
+        <p class="field-status">开始后才采集标签页声音，不使用麦克风。暂停视频不会断开连接。</p>
+      </form>
+    </section>
+
+    <section class="card" id="reading">
+      <div class="section-heading"><h2>阅读偏好</h2></div>
+      <div class="form-grid">
+        <label>目标语言<select id="target" form="settings-form"></select></label>
+        <label>默认显示
+          <select id="display" form="settings-form">
+            <option value="replace">替换原文</option>
+            <option value="bilingual">双语对照</option>
+          </select>
+        </label>
+        <label class="wide">单页文字上限
+          <select id="max-chars" form="settings-form">
+            <option value="50000">50,000 字符</option>
+            <option value="100000">100,000 字符</option>
+            <option value="200000">200,000 字符</option>
+            <option value="500000">500,000 字符</option>
+          </select>
+        </label>
+      </div>
+      <div class="switch-list">
+        <label class="switch-row"><span class="switch-text">翻译动态新增内容</span><span class="switch"><input id="dynamic" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">划词附带段落上下文</span><span class="switch"><input id="include-context" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">复用本次会话译文</span><span class="switch"><input id="cache-enabled" form="settings-form" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <label class="switch-row"><span class="switch-text">字幕同时显示原文</span><span class="switch"><input id="caption-original" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+      </div>
+      <p id="reading-feedback" class="field-status" role="status"></p>
+    </section>
+
+    <section class="card" id="selection">
+      <div class="section-heading"><h2>划词与网站</h2></div>
+      <p class="field-status">选中只显示按钮，点击后才发送。</p>
+      <form id="site-form" class="site-form" novalidate>
+        <input id="site-url" type="url" placeholder="https://example.com" aria-label="网站地址">
+        <button type="submit" class="secondary" id="add-site">添加网站</button>
+      </form>
+      <ul id="site-list" class="site-list"></ul>
+      <button type="button" class="text-button" id="all-sites">在所有普通网站开启划词</button>
+      <p id="selection-feedback" class="field-status" role="status"></p>
+    </section>
+
+    <section class="card" id="data">
+      <div class="section-heading"><h2>用量与数据</h2></div>
+      <div class="stats">
+        <div><span id="usage-requests">0</span><small>成功请求</small></div>
+        <div><span id="usage-tokens">0</span><small>API 报告的 Token</small></div>
+        <div><span id="usage-cost">—</span><small>估算费用 USD</small></div>
+      </div>
+      <p id="cache-summary" class="field-status"></p>
+      <div class="row">
+        <button type="button" class="secondary" id="clear-cache">清除译文缓存</button>
+        <button type="button" class="text-button" id="clear-usage">重置统计</button>
+      </div>
+      <p id="data-feedback" class="field-status" role="status"></p>
+      <p class="privacy-note">API Key 只保存在此设备。翻译文字会发到你配置的服务商；用量不含对方可能计费的失败请求。</p>
+    </section>
+
+    <div class="save-bar">
+      <p id="feedback" role="status">设置保存在此设备。</p>
+      <button class="primary" type="submit" form="settings-form" id="save">保存设置</button>
+    </div>
   </main>
-</div><script type="module" src="/src/ui/options.ts"></script></body></html>
+</div>
+<script type="module" src="/src/ui/options.ts"></script>
+</body>
+</html>

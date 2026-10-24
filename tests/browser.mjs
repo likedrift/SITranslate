@@ -55,12 +55,43 @@ async function complete(){await until(async()=>['watching','done'].includes((awa
 async function step(name,fn){const start=performance.now();await fn();results.push({name,passed:true,ms:Math.round(performance.now()-start)});console.log(`PASS ${name}`);}
 try{
   await step('Configure provider through the actual settings UI',async()=>{
+    await until(async()=>await ui.locator('#stream').isChecked()&&await ui.locator('#dynamic').isChecked()&&await ui.locator('#cache-enabled').isChecked());
     await ui.locator('#profile-type').selectOption('compatible');await ui.locator('#base-url').fill(origin+'/v1');await ui.locator('#api-key').fill('test-key-not-a-real-secret');await ui.locator('#model').fill('mock-translator');
     assert.match(await ui.locator('#app-version').innerText(),/VERSION 0\.7\.0/);
     await ui.locator('#settings-form').evaluate(form=>form.requestSubmit());await until(async()=>await ui.locator('#feedback').textContent()==='设置已保存。');
     const settings=await rpc('settings:get');assert.equal(settings.profiles[0].baseUrl,origin+'/v1');
-    await activate();await popup.reload();await ui.screenshot({path:'artifacts/settings-light.png',fullPage:true});await popup.setViewportSize({width:360,height:640});await popup.screenshot({path:'artifacts/popup-light.png'});
+    await activate();await popup.reload();await until(async()=>await popup.locator('#video-start').textContent()==='翻译视频字幕');assert.equal(await popup.locator('#video-start').isDisabled(),false);
+    await ui.screenshot({path:'artifacts/settings-light.png',fullPage:true});await popup.setViewportSize({width:360,height:640});await popup.screenshot({path:'artifacts/popup-light.png'});
     await ui.emulateMedia({colorScheme:'dark'});await ui.screenshot({path:'artifacts/settings-dark.png',fullPage:true});await ui.emulateMedia({colorScheme:'light'});
+  });
+  await step('Settings nav follows the visible section, switches reload from storage, and speech save stays separate',async()=>{
+    await ui.evaluate(()=>window.scrollTo(0,0));
+    await until(async()=>await ui.locator('a.nav-link[href="#providers"]').evaluate(el=>el.classList.contains('active')));
+    await ui.locator('a.nav-link[href="#speech"]').click();
+    await until(async()=>await ui.locator('a.nav-link[href="#speech"]').evaluate(el=>el.classList.contains('active')));
+    const navPaint=await ui.evaluate(()=>{
+      const providers=document.querySelector('a.nav-link[href="#providers"]'),speech=document.querySelector('a.nav-link[href="#speech"]');
+      return {providersActive:providers.classList.contains('active'),speechActive:speech.classList.contains('active'),providers:getComputedStyle(providers).backgroundColor,speech:getComputedStyle(speech).backgroundColor};
+    });
+    assert.equal(navPaint.providersActive,false);assert.equal(navPaint.speechActive,true);assert.notEqual(navPaint.providers,navPaint.speech);
+    await until(async()=>await ui.locator('#model').inputValue()==='mock-translator'&&await ui.locator('#stream').isChecked()&&await ui.locator('#dynamic').isChecked()&&await ui.locator('#cache-enabled').isChecked()&&await ui.locator('#is-active').isChecked()&&await ui.locator('#caption-original').isChecked());
+    assert.equal(await ui.locator('#json-mode').isChecked(),false);assert.equal(await ui.locator('#include-context').isChecked(),false);
+    await ui.locator('#cache-enabled').setChecked(false);await until(async()=>await ui.locator('#feedback').textContent()==='有未保存的修改。');
+    await ui.reload();await until(async()=>await ui.locator('#model').inputValue()==='mock-translator'&&await ui.locator('#cache-enabled').isChecked());
+    await ui.locator('#cache-enabled').setChecked(false);await ui.locator('#settings-form').evaluate(form=>form.requestSubmit());await until(async()=>await ui.locator('#feedback').textContent()==='设置已保存。');
+    await ui.reload();await until(async()=>await ui.locator('#model').inputValue()==='mock-translator'&&!(await ui.locator('#cache-enabled').isChecked()));
+    await ui.locator('#cache-enabled').setChecked(true);await ui.locator('#settings-form').evaluate(form=>form.requestSubmit());await until(async()=>await ui.locator('#feedback').textContent()==='设置已保存。');
+    assert.equal(await ui.locator('#delete-profile').isDisabled(),true);
+    await ui.locator('#add-profile').click();await until(async()=>await ui.locator('#feedback').textContent()==='填写服务地址和模型后保存。');
+    assert.equal(await ui.locator('#delete-profile').isDisabled(),false);await ui.locator('#delete-profile').click();
+    assert.equal(await ui.locator('#delete-profile').isDisabled(),true);assert.equal((await rpc('settings:get')).profiles.length,1);
+    await until(async()=>/已在所有普通网站开启|重新授权所有普通网站/.test(await ui.locator('#all-sites').textContent()??''));
+    await ui.locator('#profile-name').fill('临时名称');await until(async()=>await ui.locator('#feedback').textContent()==='有未保存的修改。');
+    await ui.locator('#speech-key').fill('temporary-speech-key');await ui.locator('#speech-key').press('Enter');
+    await until(async()=>await ui.locator('#speech-feedback').textContent()==='语音配置已保存。');
+    assert.equal(await ui.locator('#feedback').textContent(),'有未保存的修改。');
+    await ui.locator('#profile-name').fill('DeepSeek');await ui.locator('#settings-form').evaluate(form=>form.requestSubmit());await until(async()=>await ui.locator('#feedback').textContent()==='设置已保存。');
+    await ui.locator('#speech-key').fill('');await ui.locator('#speech-save').click();await until(async()=>await ui.locator('#speech-feedback').textContent()==='语音配置已保存。');
   });
   await step('Selection is on by default, reopening popup restores state, and disabling updates the current page',async()=>{
     await until(isInjected);assert.deepEqual(await rpc('selection:origins'),['https://*/*','http://*/*']);
