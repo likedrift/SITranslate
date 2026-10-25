@@ -75,13 +75,29 @@ describe('live translation session',{concurrency:1},()=>{
     assert.equal(typeof report.rows.find(row=>row.sourceChars==='再来一句。'.length)?.asrMs,'number');
     assert.equal(report.outcomes.completed,2);
     assert.equal(report.settings.asrModel,'qwen3-asr-flash-realtime');assert.equal(report.settings.language,'ja');assert.equal(report.settings.textModel,'deepseek-flash');assert.equal(report.settings.textStream,true);assert.equal(report.settings.readingMode,'live');assert.equal(report.settings.target,'zh-Hans');
-    assert.deepEqual(report.policy,{maxQueue:3,skipAfterMs:12000,expireAfterMs:15000,translationTimeoutMs:12000});
+    assert.deepEqual(report.policy,{maxQueue:3,skipAfterMs:12000,expireAfterMs:15000,translationTimeoutMs:12000,silenceDurationMs:600});
     const row=report.rows.find(item=>item.sourceChars==='短句。'.length)!;
     await speech.route({type:'speech:paint',sessionId:'sess',traceId:row.id,at:receivedAt+500,arrivedAt:receivedAt+20,sourceEndAt},page);
     const painted=await speech.route({type:'speech:diagnostics'},ui) as {metrics:{audioToPaintMs?:{samples:number;p50:number};asrMs?:{samples:number}}};
     assert.equal(painted.metrics.asrMs?.samples,2);assert.equal(painted.metrics.audioToPaintMs?.samples,1);assert.equal(painted.metrics.audioToPaintMs?.p50,920);
     const raw=JSON.stringify(report);
     for(const secret of ['secret-speech-key','secret-text-key','山田太郎','dashscope','https://','短句','再来一句','sourceEndAt'])assert.ok(!raw.includes(secret),secret);
+  });
+  test('diagnostic policy reports each saved VAD tier and treats a legacy config as 600 ms',async()=>{
+    for(const silenceDurationMs of [400,800] as const){
+      installChrome(activeSession(),{...speechLocal(),speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key',silenceDurationMs,context:'不要出现在导出'}},[]);
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate:async()=>{throw new Error('unused');},cancel(){}});
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {policy:{silenceDurationMs:number}};
+      assert.equal(report.policy.silenceDurationMs,silenceDurationMs);
+      const raw=JSON.stringify(report);
+      assert.ok(!raw.includes('secret-speech-key'));assert.ok(!raw.includes('不要出现在导出'));
+    }
+    const legacy={...DEFAULT_SPEECH,apiKey:'secret-speech-key'} as {silenceDurationMs?:number};
+    delete legacy.silenceDurationMs;
+    installChrome(activeSession(),{...speechLocal(),speechSettings:legacy},[]);
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate:async()=>{throw new Error('unused');},cancel(){}});
+    const report=await speech.route({type:'speech:diagnostics'},ui) as {policy:{silenceDurationMs:number}};
+    assert.equal(report.policy.silenceDurationMs,600);
   });
   test('A long enough unfinished tail flushes at 800 ms without waiting for the next speech:health',async()=>{
     const captions:Record<string,unknown>[]=[],session=activeSession();

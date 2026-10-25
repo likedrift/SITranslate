@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {DEFAULT_SPEECH,STREAMING_MODEL,normalizeSpeech,validateSpeech,speechAuthRule,speechUrl} from '../src/core/speech.ts';
+import {DEFAULT_SPEECH,STREAMING_MODEL,normalizeSpeech,validateSpeech,speechAuthRule,speechUrl,type SpeechSettings} from '../src/core/speech.ts';
 import {speechProtocol} from '../src/core/speech-protocol.ts';
 import {AudioClock} from '../src/core/audio-clock.ts';
 const streaming={...DEFAULT_SPEECH,model:STREAMING_MODEL,endpoint:'wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference',context:'番組のゲストは山田太郎です。'};
@@ -13,6 +13,22 @@ test('Both ASR families normalize paths without changing region, workspace, key 
 test('Streaming URL and exact initiator-scoped auth have no model or key query string',()=>{
   const rule=speechAuthRule(streaming.endpoint,streaming.model,'test-key','self');assert.equal(rule.condition.urlFilter,`|${streaming.endpoint}|`);assert.deepEqual(rule.condition.initiatorDomains,['self']);
   assert.equal(speechUrl(streaming.endpoint,streaming.model),streaming.endpoint);assert.match(speechUrl(DEFAULT_SPEECH.endpoint,DEFAULT_SPEECH.model),/\?model=qwen3-asr-flash-realtime$/);
+});
+test('Server VAD silence is mapped per protocol and defaults to 600 ms',()=>{
+  const legacy={...streaming} as SpeechSettings & {silenceDurationMs?:unknown};
+  delete legacy.silenceDurationMs;
+  assert.equal((speechProtocol(legacy).start as any).payload.parameters.max_sentence_silence,600);
+  assert.equal((speechProtocol(DEFAULT_SPEECH).start as any).session.turn_detection.silence_duration_ms,600);
+  for(const ms of [400,600,800] as const){
+    const settings={...streaming,silenceDurationMs:ms};
+    const streamingStart=speechProtocol(settings,'task').start as any;
+    assert.equal(streamingStart.payload.parameters.max_sentence_silence,ms);
+    assert.equal(streamingStart.payload.parameters.sample_rate,16000);
+    assert.equal(streamingStart.payload.parameters.heartbeat,true);
+    assert.equal(streamingStart.payload.parameters.format,'pcm');
+    const realtime=(speechProtocol({...DEFAULT_SPEECH,silenceDurationMs:ms}).start as any).session.turn_detection;
+    assert.deepEqual(realtime,{type:'server_vad',threshold:0.2,silence_duration_ms:ms});
+  }
 });
 test('Streaming uses run-task, Japanese hints, bounded context, binary PCM and finish-task',()=>{
   const p=speechProtocol(streaming,'task'),start=p.start as any;assert.equal(start.header.action,'run-task');assert.equal(start.payload.model,STREAMING_MODEL);assert.deepEqual(start.payload.parameters.language_hints,['ja']);assert.equal(start.payload.parameters.sample_rate,16000);assert.equal(start.payload.parameters.heartbeat,true);assert.equal(start.payload.input.context[0].content[0].text,streaming.context);

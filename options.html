@@ -108,6 +108,19 @@
             <small id="speech-context-help">原版最多 2000 字；3.1 Streaming 最多 400 字。</small>
           </label>
         </div>
+        <details class="fold" id="speech-advanced">
+          <summary>高级</summary>
+          <div class="form-grid">
+            <label>断句静默
+              <select id="speech-vad">
+                <option value="400">400 ms · 更灵敏</option>
+                <option value="600" selected>600 ms · 默认</option>
+                <option value="800">800 ms · 更稳</option>
+              </select>
+              <small id="speech-vad-help">更短更灵敏，句子更碎；更长更稳，延迟更高。</small>
+            </label>
+          </div>
+        </details>
         <div class="row speech-actions">
           <button type="submit" id="speech-save" class="secondary">保存语音配置</button>
           <button type="button" id="speech-test" class="text-button">保存并测试语音连接</button>
