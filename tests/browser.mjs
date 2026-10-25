@@ -346,6 +346,37 @@ try{
     await page.evaluate(()=>history.pushState({},'','/watch?v=another'));await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
     await context.unroute('https://www.youtube.com/watch*');
   });
+  await step('Empty page-status replies stay idle and the popup does not crash',async()=>{
+    await worker.evaluate(()=>chrome.scripting.unregisterContentScripts({ids:['selection-listener']}).catch(()=>{}));
+    const bare=await context.newPage();
+    await bare.goto(`${origin}/article?bare=1`);
+    const bareId=await worker.evaluate(async origin=>{const tabs=await chrome.tabs.query({url:origin+'/*'});return tabs.find(tab=>tab.url?.includes('bare=1'))?.id;},origin);
+    assert.equal(typeof bareId,'number');
+    const injected=await worker.evaluate(id=>chrome.scripting.executeScript({target:{tabId:id},func:()=>!!globalThis.__siTranslate}),bareId);
+    assert.equal(injected[0].result,false);
+    await worker.evaluate(id=>chrome.scripting.executeScript({target:{tabId:id},files:['video.js']}),bareId);
+    const videoInjected=await worker.evaluate(id=>chrome.scripting.executeScript({target:{tabId:id},func:()=>!!globalThis.__siVideoTranslate}),bareId);
+    assert.equal(videoInjected[0].result,true);
+    await worker.evaluate(async id=>chrome.storage.session.set({[`page:${id}`]:{state:'translating',total:4,completed:2,failed:0,chars:12,limited:false,message:'正在翻译',display:'replace'}}),bareId);
+    await worker.evaluate(id=>chrome.tabs.update(id,{active:true}),bareId);
+    const direct=await worker.evaluate(async id=>{try{return {value:await chrome.tabs.sendMessage(id,{type:'page:get-status'},{frameId:0})};}catch(error){return {threw:String(error)};}},bareId);
+    assert.ok(direct.value==null&&!direct.threw,`expected an empty page status reply, got ${JSON.stringify(direct)}`);
+    const pageStatus=await rpc('tab:status');
+    assert.equal(pageStatus.state,'idle');assert.equal(pageStatus.message,'');assert.equal(pageStatus.total,4);assert.equal(pageStatus.completed,2);
+    const videoStatus=await rpc('video:status');
+    assert.equal(videoStatus.state,'idle');assert.match(videoStatus.message,/有字幕的视频可开启翻译/);
+    const displayed=await rpc('video:action',{action:'display',bilingual:true});
+    assert.equal(displayed.state,'idle');assert.equal(typeof displayed.message,'string');
+    const speech=await rpc('speech:status');
+    assert.ok(['idle','connecting','active','stopped','error'].includes(speech.state));assert.equal(typeof speech.message,'string');
+    await popup.reload();
+    await until(async()=>await popup.locator('#count').textContent()==='2 / 4');
+    assert.equal(await popup.locator('#error').isHidden(),true);
+    assert.equal(await popup.locator('#state').textContent(),'准备翻译');
+    assert.equal(await popup.locator('#video-start').textContent(),'翻译视频字幕');
+    assert.doesNotMatch(await popup.locator('body').innerText(),/Cannot read properties/);
+    await bare.close();
+  });
   assert.deepEqual(browserErrors,[]);await writeFile('artifacts/browser-tests.json',JSON.stringify({passed:results.length,tests:results},null,2));
   console.log(`${results.length} browser tests passed. Screenshots and performance report: artifacts/`);
 }catch(error){await writeFile('artifacts/browser-tests.json',JSON.stringify({passed:results.length,tests:results,error:error.stack,browserErrors},null,2));await page.screenshot({path:'artifacts/failure.png'}).catch(()=>{});throw error;}

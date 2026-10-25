@@ -1,7 +1,7 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {endpointFor,validateSettings,validateInput,parseSegments} from '../src/core/validation.ts';
-import {DEFAULT_SETTINGS,type TranslationInput} from '../src/core/types.ts';
+import {DEFAULT_SETTINGS,EMPTY_STATUS,EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,isPageStatus,isVideoStatus,pageStatusOrIdle,videoStatusOrEmpty,type TranslationInput} from '../src/core/types.ts';
 import {Scheduler} from '../src/core/scheduler.ts';
 import {TranslationCache,cacheKey} from '../src/core/cache.ts';
 import {CompatibleAdapter,readSSE} from '../src/core/provider.ts';
@@ -139,6 +139,32 @@ test('malformed responses stop after bounded subdivision and authentication is n
     calls=0;globalThis.fetch=(async()=>{calls++;return new Response('',{status:401});}) as typeof fetch;
     await assert.rejects(new CompatibleAdapter().translate(DEFAULT_SETTINGS.profiles[0],input,new AbortController().signal),/API Key/);assert.equal(calls,1);
   }finally{globalThis.fetch=original;}
+});
+test('empty or invalid status replies become idle and valid replies stay unchanged',()=>{
+  const live={state:'translating' as const,total:4,completed:2,failed:0,chars:20,limited:false,message:'正在翻译',display:'bilingual' as const};
+  const stored={state:'done' as const,total:5,completed:4,failed:1,chars:80,limited:true,message:'已完成',display:'replace' as const};
+  assert.equal(isPageStatus(live),true);
+  assert.equal(pageStatusOrIdle(live,stored),live);
+  assert.equal(isPageStatus({...live,message:'长'.repeat(401)}),true);
+  const idle=pageStatusOrIdle(undefined,stored);
+  assert.deepEqual(idle,{...stored,state:'idle',message:''});
+  assert.equal(pageStatusOrIdle(null,{total:4,completed:2}).total,4);
+  assert.equal(pageStatusOrIdle(false,{total:-1,completed:1}).total,0);
+  for(const empty of [undefined,null,false,true,0,'',{},{state:'idle'},{state:'translating',total:1},{...live,state:'nope'}]){
+    const page=pageStatusOrIdle(empty);
+    assert.equal(page.state,'idle');assert.equal(page.message,'');assert.equal(page.total,0);
+  }
+  const fresh=pageStatusOrIdle(undefined);fresh.total=9;assert.equal(pageStatusOrIdle(null).total,0);
+  assert.deepEqual(pageStatusOrIdle({...EMPTY_STATUS,state:'scanning'}),{...EMPTY_STATUS,state:'scanning'});
+  const video={state:'error' as const,source:'',completed:0,message:NO_VIDEO_CAPTION_MESSAGE,bilingual:true};
+  assert.equal(isVideoStatus(video),true);assert.equal(videoStatusOrEmpty(video),video);
+  const active={state:'active' as const,source:'YouTube 当前字幕',completed:3,message:'请在 YouTube 播放器中开启字幕；仅翻译当前显示的内容。',bilingual:false};
+  assert.equal(videoStatusOrEmpty(active),active);
+  for(const empty of [undefined,null,false,true,{},{state:'active'},{...active,bilingual:'yes'}]){
+    const status=videoStatusOrEmpty(empty);
+    assert.equal(status.state,'idle');assert.equal(status.message,EMPTY_VIDEO_STATUS.message);assert.equal(status.completed,0);assert.equal(status.bilingual,true);
+  }
+  const blank=videoStatusOrEmpty(undefined);blank.state='active';assert.equal(videoStatusOrEmpty(null).state,'idle');
 });
 test('SSE retains length termination even when usage arrives in a separate frame',async()=>{
   const wire='data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":5}}\n\ndata: [DONE]\n\n';

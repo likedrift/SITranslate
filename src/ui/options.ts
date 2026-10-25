@@ -2,7 +2,7 @@ import {type Settings,type Profile,type TranslationResult} from '../core/types';
 import type {CaptionLayout} from '../core/caption-layout';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
-import {normalizeSpeech,isStreaming,type SpeechSettings,type SpeechStatus} from '../core/speech';
+import {normalizeSpeech,isStreaming,speechStatusOrIdle,type SpeechSettings} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[],dirty=false,ready=false,speechReady=false;
 el('app-version').textContent=`VERSION ${chrome.runtime.getManifest().version}`;
 function feedback(text:string,state=''){const node=el('feedback');node.textContent=text;node.className=state;}
@@ -181,7 +181,7 @@ async function saveSpeech(test=false){
   const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim()};
   try{
     const next=normalizeSpeech(data);await rpc('speech:settings-save',{settings:next});el<HTMLInputElement>('speech-endpoint').value=next.endpoint;readSpeechAddress();speechStatus('语音配置已保存。','success');
-    if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=await rpc<SpeechStatus>('speech:status');speechStatus(state.message,state.state==='error'?'error':'');if(state.state!=='connecting')return;}speechStatus('连接测试超时，请检查网络与地域。','error');}
+    if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=speechStatusOrIdle(await rpc('speech:status'));speechStatus(state.message,state.state==='error'?'error':'');if(state.state!=='connecting')return;}speechStatus('连接测试超时，请检查网络与地域。','error');}
   }catch(error){speechStatus(error instanceof Error?error.message:'语音配置保存失败。','error');}
   finally{speechBusy=false;el<HTMLButtonElement>('speech-save').disabled=false;el<HTMLButtonElement>('speech-test').disabled=false;}
 }

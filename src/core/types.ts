@@ -47,6 +47,26 @@ export const DEFAULT_SETTINGS: Settings = {
 export const EMPTY_STATUS: PageStatus = {state: 'idle', total: 0, completed: 0,
   failed: 0, chars: 0, limited: false, message: '', display: 'replace'};
 export const EMPTY_VIDEO_STATUS:VideoStatus={state:'idle',source:'',completed:0,message:'有字幕的视频可开启翻译。',bilingual:true};
+const PAGE_STATES=['idle','scanning','translating','watching','done','stopped'] as const;
+const VIDEO_STATES=['idle','loading','active','stopped','error'] as const;
+function count(value:unknown):value is number{return typeof value==='number'&&Number.isFinite(value)&&value>=0;}
+export function isPageStatus(value:unknown):value is PageStatus{
+  if(!value||typeof value!=='object')return false;
+  const s=value as PageStatus;
+  return (PAGE_STATES as readonly string[]).includes(s.state)&&(['total','completed','failed','chars'] as const).every(key=>count(s[key]))&&typeof s.limited==='boolean'&&typeof s.message==='string'&&(s.display==='replace'||s.display==='bilingual');
+}
+export function isVideoStatus(value:unknown):value is VideoStatus{
+  if(!value||typeof value!=='object')return false;
+  const s=value as VideoStatus;
+  return (VIDEO_STATES as readonly string[]).includes(s.state)&&typeof s.source==='string'&&count(s.completed)&&typeof s.message==='string'&&typeof s.bilingual==='boolean';
+}
+// 页面脚本未注入，或监听了消息却没有回传状态时，保留已保存进度并回到空闲。
+export function pageStatusOrIdle(live:unknown,stored?:unknown):PageStatus{
+  if(isPageStatus(live))return live;
+  const merged:PageStatus={...EMPTY_STATUS,...(stored&&typeof stored==='object'?stored as Partial<PageStatus>:{}),state:'idle',message:''};
+  return isPageStatus(merged)?merged:{...EMPTY_STATUS};
+}
+export function videoStatusOrEmpty(value:unknown):VideoStatus{return isVideoStatus(value)?value:{...EMPTY_VIDEO_STATUS};}
 export function isTarget(target: unknown): target is string {
   return typeof target === 'string' && LANGUAGES.some(([id]) => id === target);
 }
