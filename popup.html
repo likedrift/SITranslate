@@ -80,8 +80,8 @@
         <option value="balanced">阅读优先</option>
         <option value="live">实时优先</option>
       </select>
+      <small id="caption-pause-note"></small>
     </label>
-    <p class="status" id="caption-pause-note"></p>
     <label>字幕范围
       <select id="caption-mode">
         <option value="video">视频内</option>
@@ -103,7 +103,10 @@
 
   <details id="speech-diagnostics" class="fold">
     <summary>本地延迟诊断</summary>
-    <pre id="speech-diagnostics-text" class="diagnostics-text">等待样本。</pre>
+    <div id="speech-diagnostics-text" class="diagnostics">
+      <p id="speech-diagnostics-summary" class="diagnostics-summary">等待样本。</p>
+      <pre id="speech-diagnostics-dump" class="diagnostics-dump" hidden></pre>
+    </div>
     <div class="row">
       <button id="speech-diagnostics-export" class="text-button" type="button">导出诊断</button>
       <button id="speech-diagnostics-clear" class="text-button" type="button">清除记录</button>
