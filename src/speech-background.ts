@@ -1,4 +1,5 @@
 import {DEFAULT_SPEECH,IDLE_SPEECH,normalizeSpeech,speechAuthRule,type SpeechStatus,type SpeechSettings} from './core/speech';
+import {liveInterruptHint} from './core/live-hints';
 import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver} from './core/types';
 import {Utterances,enqueuePiece,type SpeechPiece} from './core/utterances';
 import {SpeechDiagnostics} from './core/speech-diagnostics';
@@ -20,11 +21,11 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   const serial=<T>(fn:()=>Promise<T>):Promise<T>=>{const next=lock.catch(()=>{}).then(fn);lock=next;return next;};
   const command=(extra:Record<string,unknown>)=>chrome.runtime.sendMessage({target:'speech-offscreen',...extra});
   const caption=(data:Record<string,unknown>)=>state.tabId<0?Promise.resolve():chrome.tabs.sendMessage(state.tabId,{type:'video:live-caption',sessionId:state.sessionId,...data},{frameId:0}).catch(()=>{});
-  async function stop(message='实时语音翻译已停止。',error=false){
+  async function stop(message='实时语音翻译已停止。',error=false,hint=''){
     epoch++;inflight=undefined;for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';queue=[];busy=false;utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();deps.cancel(`subtitle-live-${state.sessionId}`);
     try{if((await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]})).length){await command({action:'stop'});await chrome.offscreen.closeDocument();}}catch{ /* Closing a tab may have already released capture. */ }
     await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});
-    await caption({stop:true});state={...state,state:error?'error':'stopped',message};await chrome.action.setBadgeText({tabId:state.tabId>=0?state.tabId:undefined,text:''}).catch(()=>{});await persist();return state;
+    await caption(hint?{stop:true,hint:hint.slice(0,200)}:{stop:true});state={...state,state:error?'error':'stopped',message};await chrome.action.setBadgeText({tabId:state.tabId>=0?state.tabId:undefined,text:''}).catch(()=>{});await persist();return state;
   }
   async function pump(){
     if(busy||state.state!=='active'||testing)return;const item=queue.shift();if(!item)return;
@@ -94,7 +95,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=(context+' '+text).slice(-600);}
       if(m.final)await persist();return;
     }
-    if(m.type==='speech:stop'&&!ui){if(sender.tab?.id!==state.tabId||m.sessionId!==state.sessionId)throw new Error('无权停止其他标签页音频。');return serial(()=>m.sessionId===state.sessionId?stop('视频已切换或拖动，请重新开始实时翻译。'):Promise.resolve(state));}
+    if(m.type==='speech:stop'&&!ui){if(sender.tab?.id!==state.tabId||m.sessionId!==state.sessionId)throw new Error('无权停止其他标签页音频。');const hint=liveInterruptHint(m.cause);return serial(()=>m.sessionId===state.sessionId?stop(hint,false,hint):Promise.resolve(state));}
     if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
     if(m.type==='speech:diagnostics')return {extensionVersion:chrome.runtime.getManifest().version,...diagnostics.report(),counters:{...counters}};
     if(m.type==='speech:diagnostics-clear'){diagnostics.clear();counters={asrEvents:0,asrIntermediate:0,asrStableIntermediate:0};await persist();return true;}
@@ -107,6 +108,6 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     throw new Error('不支持的语音操作。');
   }
   chrome.tabs.onRemoved.addListener(id=>{void loaded.then(()=>{if(id===state.tabId&&['active','connecting'].includes(state.state))return serial(()=>stop('直播标签页已关闭。'));}).catch(()=>{});});
-  chrome.tabs.onUpdated.addListener((id,change)=>{if(change.status==='loading')void loaded.then(()=>{if(id===state.tabId&&['active','connecting'].includes(state.state))return serial(()=>stop('直播页面已刷新，请重新开始。'));}).catch(()=>{});});
+  chrome.tabs.onUpdated.addListener((id,change)=>{if(change.status!=='loading')return;void loaded.then(()=>{if(id!==state.tabId)return;const hint=liveInterruptHint('refresh');if(['active','connecting'].includes(state.state))void serial(()=>stop(hint,false,hint));else if(state.state==='stopped'&&state.message===liveInterruptHint('leave'))void serial(async()=>{if(state.state!=='stopped'||state.message!==liveInterruptHint('leave'))return;state={...state,message:hint};await persist();});}).catch(()=>{});});
   return {route};
 }

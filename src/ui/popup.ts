@@ -2,6 +2,8 @@ import {type Settings,type PageStatus,type VideoStatus} from '../core/types';
 import {rpc,el,value,languageOptions,sitePattern} from './client';
 import type {SpeechStatus} from '../core/speech';
 import type {CaptionLayout} from '../core/caption-layout';
+import {PAUSE_SCROLL_POPUP_NOTE,STREAM_OFF_WARNING} from '../core/live-hints';
+el('caption-pause-note').textContent=PAUSE_SCROLL_POPUP_NOTE;
 let settings:Settings;let busy=false;let currentTab:chrome.tabs.Tab|undefined;
 const IDLE_VIDEO_COPY='有字幕的视频可开启翻译。';
 async function refreshSelection(){
@@ -19,6 +21,12 @@ async function refreshSelection(){
   }
 }
 function error(text:string){el('error').textContent=text;el('error').hidden=!text;}
+function paintStreamWarning(){
+  const profile=settings?.profiles.find(p=>p.id===value('profile'));
+  const node=el('speech-stream-warning');
+  const off=!!profile&&profile.stream===false;
+  node.hidden=!off;node.textContent=off?STREAM_OFF_WARNING:'';
+}
 function selectedDisplay(){return (document.querySelector('input[name="display"]:checked') as HTMLInputElement).value;}
 async function preferences(){await rpc('preferences:save',{target:value('target'),display:selectedDisplay(),profileId:value('profile')});}
 function paint(s:PageStatus){
@@ -54,7 +62,7 @@ async function action(action:string){busy=true;error('');el<HTMLButtonElement>('
 el('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 for(const [id,act]of [['translate','start'],['stop','stop'],['restore','restore'],['retry','retry']])el(id).addEventListener('click',()=>void action(act));
 document.querySelectorAll('input[name="display"]').forEach(input=>input.addEventListener('change',async()=>{try{await preferences();await rpc('tab:action',{action:'display'});}catch(err){error(err instanceof Error?err.message:'无法切换显示。');}}));
-for(const id of ['target','profile'])el(id).addEventListener('change',()=>preferences().catch(err=>error(err.message)));
+for(const id of ['target','profile'])el(id).addEventListener('change',()=>{if(id==='profile')paintStreamWarning();preferences().catch(err=>error(err.message));});
 el('grant-site').addEventListener('click',()=>{
   if(el('grant-site').dataset.enabled==='true'){void chrome.runtime.openOptionsPage();return;}
   // The origin is loaded on opening the popup, so request() is directly inside the user gesture.
@@ -74,18 +82,19 @@ async function init(){
   for(const p of settings.profiles){const option=document.createElement('option');option.value=p.id;option.textContent=p.name;el('profile').append(option);}el<HTMLSelectElement>('profile').value=settings.activeProfileId;
   (document.querySelector(`input[name="display"][value="${settings.display}"]`)as HTMLInputElement).checked=true;
   const active=settings.profiles.find(p=>p.id===settings.activeProfileId);if(!active?.apiKey)error('请先在设置中填写 API Key 和模型。');
+  paintStreamWarning();
   await refresh();
   await refreshSelection();
   await refreshVideo();
   paintCaption(await rpc<CaptionLayout>('caption:get'));
 }
-chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Object.keys(changes).some(key=>key.startsWith('page:')))void refresh();if(area==='local'&&changes.selectionOrigins)void refreshSelection();if(area==='local'&&changes.captionLayout)paintCaption(changes.captionLayout.newValue);});
+chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Object.keys(changes).some(key=>key.startsWith('page:')))void refresh();if(area==='local'&&changes.selectionOrigins)void refreshSelection();if(area==='local'&&changes.captionLayout)paintCaption(changes.captionLayout.newValue);if(area==='local'&&changes.settings?.newValue){settings=changes.settings.newValue;paintStreamWarning();}});
 chrome.permissions.onAdded.addListener(()=>void refreshSelection());
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection());
 void init().catch(err=>error(err.message));
 setInterval(()=>void refreshVideo(),1000);
-async function refreshSpeech(){try{const s=await rpc<SpeechStatus>('speech:status');const base=s.state==='idle'?'未开始':s.message;el('speech-state').textContent=base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
-el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
+async function refreshSpeech(){try{const s=await rpc<SpeechStatus>('speech:status');const base=s.state==='idle'?'未开始':s.message;const restart=/开始实时翻译/.test(s.message)&&['stopped','error'].includes(s.state);el('speech-state').textContent=restart?s.message:base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el('speech-state').className=restart?'status attention':'status';el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
+el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();settings=await rpc<Settings>('settings:get');paintStreamWarning();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
 el('speech-stop').addEventListener('click',()=>void rpc('speech:stop').then(refreshSpeech).catch(e=>error(e.message)));
 el('speech-settings').addEventListener('click',()=>void chrome.tabs.create({url:chrome.runtime.getURL('options.html#speech')}));
 void refreshSpeech();setInterval(()=>void refreshSpeech(),1000);
