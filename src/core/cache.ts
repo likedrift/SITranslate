@@ -1,4 +1,5 @@
 import type { Profile, TranslationInput, TranslationResult, Segment } from './types';
+import {isLiveSubtitle} from './live-translate';
 export interface CacheEntry { key:string; texts:string[]; bytes:number; time:number }
 export class TranslationCache {
   private entries = new Map<string,CacheEntry>();
@@ -38,8 +39,10 @@ export class TranslationCache {
   }
 }
 export async function cacheKey(profile:Profile,input:TranslationInput) {
+  const glossary=isLiveSubtitle(input)&&typeof input.glossary==='string'&&input.glossary?input.glossary:undefined;
   const value=JSON.stringify({version:2,profile:profile.id,type:profile.type,endpoint:profile.baseUrl,model:profile.model,
     json:profile.jsonMode,thinking:profile.disableThinking,target:input.target,kind:input.kind,
+    ...(glossary?{glossary}:{}),
     blocks:input.blocks.map(b=>({context:b.context,texts:b.segments.map(s=>s.text)}))});
   const hash=await crypto.subtle.digest('SHA-256',new TextEncoder().encode(value));
   return [...new Uint8Array(hash)].map(b=>b.toString(16).padStart(2,'0')).join('');

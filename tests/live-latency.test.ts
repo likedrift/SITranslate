@@ -41,5 +41,6 @@ test('Diagnostic reports count outcomes and comparison settings omit secrets and
   const settings=diagnosticSettings({asrModel:'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',language:'ja',textModel:'deepseek-flash',textStream:false,readingMode:'live',target:'zh-Hans'});
   assert.equal(settings.asrModel,undefined);assert.equal(settings.language,'ja');assert.equal(settings.textModel,'deepseek-flash');assert.equal(settings.textStream,false);assert.equal(settings.readingMode,'live');assert.equal(settings.target,'zh-Hans');
   assert.equal(diagnosticSettings({asrModel:'qwen3-asr-flash-realtime',language:'ja',textModel:'https://evil.example/model',readingMode:'fast',target:'not a language'}).textModel,undefined);
-  assert.ok(!JSON.stringify(settings).includes('dashscope'));
+  assert.equal(diagnosticSettings({terms:true}).terms,true);assert.equal(diagnosticSettings({terms:false}).terms,false);assert.equal(diagnosticSettings({terms:'山田太郎'}).terms,undefined);
+  assert.ok(!JSON.stringify(settings).includes('dashscope'));assert.ok(!JSON.stringify(diagnosticSettings({terms:'山田太郎'})).includes('山田太郎'));
 });

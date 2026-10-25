@@ -1,4 +1,5 @@
 import { isTarget, type Settings, type TranslationInput, type TextBlock } from './types';
+import { LIVE_GLOSSARY_MAX_CHARS } from './live-translate';
 
 export function endpointFor(base: string): {url: string; origin: string; permission: string} {
   let u: URL;
@@ -31,7 +32,8 @@ export function validateInput(value: unknown): asserts value is TranslationInput
   const x = value as TranslationInput;
   if (!x || !['page','selection','subtitle','test'].includes(x.kind) || !isTarget(x.target) ||
       !boundedString(x.requestId,100) || !x.requestId || !boundedString(x.taskId,100) || !x.taskId ||
-      !boundedString(x.profileId,80) || !Array.isArray(x.blocks) || x.blocks.length < 1 || x.blocks.length > 64) throw new Error('翻译请求无效。');
+      !boundedString(x.profileId,80) || !Array.isArray(x.blocks) || x.blocks.length < 1 || x.blocks.length > 64 ||
+      (x.glossary !== undefined && !boundedString(x.glossary, LIVE_GLOSSARY_MAX_CHARS))) throw new Error('翻译请求无效。');
   const ids = new Set<string>(); let chars = 0; let contextChars = 0;
   const blockIds = new Set<string>();
   for (const b of x.blocks) {
