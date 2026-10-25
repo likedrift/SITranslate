@@ -2,7 +2,7 @@ import {type Settings,type Profile,type TranslationResult} from '../core/types';
 import type {CaptionLayout} from '../core/caption-layout';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
-import {normalizeSpeech,isStreaming,speechStatusOrIdle,type SpeechSettings} from '../core/speech';
+import {normalizeSpeech,isStreaming,speechStatusOrIdle,vadSilenceMs,type SpeechSettings} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[],dirty=false,ready=false,speechReady=false;
 el('app-version').textContent=`VERSION ${chrome.runtime.getManifest().version}`;
 function feedback(text:string,state=''){const node=el('feedback');node.textContent=text;node.className=state;}
@@ -153,6 +153,7 @@ el('clear-cache').addEventListener('click',()=>rpc('cache:clear').then(refreshUs
 el('clear-usage').addEventListener('click',()=>rpc('usage:clear').then(refreshUsage).then(()=>localStatus('data-feedback','用量统计已重置。','success')).catch(err=>localStatus('data-feedback',err.message,'error')));
 function paintSpeech(speech:SpeechSettings){
   for(const [id,key] of [['speech-key','apiKey'],['speech-endpoint','endpoint'],['speech-model','model'],['speech-language','language'],['speech-context','context']] as const)el<HTMLInputElement>(id).value=speech[key];
+  el<HTMLSelectElement>('speech-vad').value=String(vadSilenceMs(speech.silenceDurationMs));
   readSpeechAddress();speechModelHelp();
 }
 async function init(){
@@ -178,7 +179,7 @@ let speechBusy=false;
 async function saveSpeech(test=false){
   if(speechBusy)return;speechBusy=true;
   el<HTMLButtonElement>('speech-save').disabled=true;el<HTMLButtonElement>('speech-test').disabled=true;
-  const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim()};
+  const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim(),silenceDurationMs:Number(value('speech-vad')) as SpeechSettings['silenceDurationMs']};
   try{
     const next=normalizeSpeech(data);await rpc('speech:settings-save',{settings:next});el<HTMLInputElement>('speech-endpoint').value=next.endpoint;readSpeechAddress();speechStatus('语音配置已保存。','success');
     if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=speechStatusOrIdle(await rpc('speech:status'));speechStatus(state.message,state.state==='error'?'error':'');if(state.state!=='connecting')return;}speechStatus('连接测试超时，请检查网络与地域。','error');}
@@ -188,6 +189,7 @@ async function saveSpeech(test=false){
 el('speech-form').addEventListener('submit',event=>{event.preventDefault();void saveSpeech();});
 el('speech-test').addEventListener('click',()=>void saveSpeech(true));
 el('speech-form').addEventListener('input',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
+el('speech-vad').addEventListener('change',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
 function speechModelHelp(){const streaming=isStreaming(value('speech-model').trim());el<HTMLTextAreaElement>('speech-context').maxLength=streaming?400:2000;el('speech-context-help').textContent=streaming?'3.1 Streaming 最多 400 字。':'原版术语最多 2000 字。';el('speech-address-help').textContent=streaming?'3.1 需要业务空间地址。填写 Workspace ID 后自动生成，Key 须匹配地域和业务空间。':'可使用默认地址或业务空间地址，Key 须匹配地域。';}
 function readSpeechAddress(){try{const url=new URL(value('speech-endpoint')),match=url.hostname.match(/^([a-zA-Z0-9-]+)\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/);el<HTMLInputElement>('speech-workspace').value=match?.[1]??'';el<HTMLSelectElement>('speech-region').value=match?.[2]??(url.hostname==='dashscope-intl.aliyuncs.com'?'ap-southeast-1':'cn-beijing');}catch{}}
 function buildSpeechAddress(){

@@ -56,12 +56,30 @@ try{
     assert.equal(mock.stats.authorized,0);assert.equal((await rpc('speech:status')).state,'idle');
   });
   await step('Connection test verifies websocket authentication and Japanese session without recording audio',async()=>{
-    await rpc('speech:test');await until(async()=> {const s=await rpc('speech:status');if(s.state==='error')throw new Error(s.message);return s.state==='stopped';});assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.config.input_audio_transcription.language,'ja');assert.equal(mock.stats.frames,0);
+    await rpc('speech:test');await until(async()=> {const s=await rpc('speech:status');if(s.state==='error')throw new Error(s.message);return s.state==='stopped';});assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.config.input_audio_transcription.language,'ja');assert.equal(mock.stats.config.turn_detection.silence_duration_ms,600);assert.equal(mock.stats.frames,0);
     assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
+  });
+  await step('Advanced VAD silence tiers are stored and sent on the next realtime session',async()=>{
+    await ui.locator('#speech-advanced > summary').click();
+    await until(async()=>await ui.locator('#speech-vad').isVisible());
+    const help=await ui.locator('#speech-vad-help').textContent()??'';
+    assert.match(help,/更短更灵敏，句子更碎/);assert.match(help,/更长更稳，延迟更高/);
+    for(const ms of ['400','800','600']){
+      await ui.locator('#speech-vad').selectOption(ms);
+      await ui.locator('#speech-save').click();
+      await until(async()=>await ui.locator('#speech-feedback').textContent()==='语音配置已保存。');
+      assert.equal((await rpc('speech:settings-get')).silenceDurationMs,Number(ms));
+      await rpc('speech:test');
+      await until(async()=>{const s=await rpc('speech:status');if(s.state==='error')throw new Error(s.message);return s.state==='stopped';});
+      assert.equal(mock.stats.config.turn_detection.silence_duration_ms,Number(ms));
+      assert.equal(mock.stats.config.turn_detection.threshold,0.2);
+      assert.equal((await rpc('speech:diagnostics')).policy.silenceDurationMs,Number(ms));
+    }
+    await ui.locator('#speech').screenshot({path:'artifacts/vad-silence-setting.png'});
   });
   await step('Muted tabCapture and AudioWorklet send silent PCM16 frames and translate mock Japanese without site captions',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0&&mock.stats.audioBytes>3200);const s=await rpc('speech:status');assert.equal(s.state,'active');assert.equal(s.lastTranslation,'大家好。');assert.equal(mock.stats.nonzero,false);assert.equal(mock.stats.config.sample_rate,16000);
-    const latency=await rpc('speech:diagnostics');assert.ok(latency.metrics.asrMs?.samples>0,'默认模型应能从 audio_end_ms 导出识别延迟');assert.equal(latency.settings?.asrModel,'qwen3-asr-flash-realtime');assert.equal(latency.settings?.language,'ja');assert.ok(latency.outcomes?.completed>=1);assert.equal(latency.policy?.maxQueue,3);assert.equal(latency.policy?.expireAfterMs,15000);
+    const latency=await rpc('speech:diagnostics');assert.ok(latency.metrics.asrMs?.samples>0,'默认模型应能从 audio_end_ms 导出识别延迟');assert.equal(latency.settings?.asrModel,'qwen3-asr-flash-realtime');assert.equal(latency.settings?.language,'ja');assert.ok(latency.outcomes?.completed>=1);assert.equal(latency.policy?.maxQueue,3);assert.equal(latency.policy?.expireAfterMs,15000);assert.equal(latency.policy?.silenceDurationMs,600);
     assert.equal((await worker.evaluate(()=>chrome.tabCapture.getCapturedTabs()))[0].status,'active');assert.ok(requests.some(b=>b[0].segments[0].text==='皆さん、こんにちは。'));
     await page.screenshot({path:'artifacts/live-audio.png'});
   });
@@ -134,7 +152,7 @@ try{
   });
   await step('Streaming connection test uses run-task and finish-task with exact websocket auth and sends no audio',async()=>{
     mock.setReadyDelay(250);const frames=mock.stats.frames,started=mock.stats.streamingStarts,finished=mock.stats.streamingFinishes;await rpc('speech:test');await until(async()=>(await rpc('speech:status')).state==='stopped');await until(()=>mock.stats.streamingFinishes>finished);
-    assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.frames,frames);assert.equal(mock.stats.streamingStarts,started+1);assert.equal(mock.stats.urls.at(-1),'/api-ws/v1/inference');assert.deepEqual(mock.stats.lastRun.payload.parameters.language_hints,['ja']);assert.equal(mock.stats.lastRun.payload.input.context[0].content[0].text,'出演者は山田太郎です。');assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
+    assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.frames,frames);assert.equal(mock.stats.streamingStarts,started+1);assert.equal(mock.stats.urls.at(-1),'/api-ws/v1/inference');assert.deepEqual(mock.stats.lastRun.payload.parameters.language_hints,['ja']);assert.equal(mock.stats.lastRun.payload.parameters.max_sentence_silence,600);assert.equal(mock.stats.lastRun.payload.input.context[0].content[0].text,'出演者は山田太郎です。');assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
   });
   await step('Streaming captures real binary PCM only after task-started and exposes timestamps and cumulative usage',async()=>{
     const binary=mock.stats.binaryFrames,legacy=mock.stats.legacyFrames;await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).lastTranslation==='大家好。'&&!!(await rpc('speech:status')).asrUsage);
@@ -186,7 +204,7 @@ try{
   });
   await step('Local diagnostic export omits all text, audio, credentials and URLs; stopping cancels unfinished streamed captions',async()=>{
     await activate();await popup.reload();await popup.locator('#speech-diagnostics summary').click();await until(async()=>(await popup.locator('#speech-diagnostics-text').textContent()).includes('P50'));const download=popup.waitForEvent('download');await popup.locator('#speech-diagnostics-export').click();const file=await download;await file.saveAs('artifacts/exported-latency.json');const raw=await readFile('artifacts/exported-latency.json','utf8');for(const secret of ['test-speech-key','test-text-key',origin,'皆さん','第一句字幕','sourceEndAt','山田太郎','apiKey','dashscope'])assert.ok(!raw.includes(secret),'Diagnostic leak: '+secret);
-    const exported=JSON.parse(raw);assert.equal(typeof exported.outcomes?.completed,'number');assert.equal(exported.settings?.language,'ja');assert.equal(exported.settings?.textStream,true);assert.equal(exported.settings?.readingMode,'live');assert.equal(exported.policy?.skipAfterMs,12000);
+    const exported=JSON.parse(raw);assert.equal(typeof exported.outcomes?.completed,'number');assert.equal(exported.settings?.language,'ja');assert.equal(exported.settings?.textStream,true);assert.equal(exported.settings?.readingMode,'live');assert.equal(exported.policy?.skipAfterMs,12000);assert.equal(exported.policy?.silenceDurationMs,600);
     await activate();await page.bringToFront();mock.emitStreaming({sentence_id:23,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証停止。'});await until(async()=>(await captionTexts()).some(t=>t.includes('译：検')));await rpc('speech:stop');await new Promise(r=>setTimeout(r,1300));assert.equal(await page.locator('[data-si-owned=video]').count(),0);assert.ok(streamTimings.some(t=>t.cancelled));await rpc('speech:diagnostics-clear');assert.equal((await rpc('speech:diagnostics')).samples,0);
   });
   assert.equal(mock.stats.nonzero,false);assert.deepEqual(errors,[]);await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,audioVerification:'muted real tabCapture with silent PCM; nonzero processing separately verified in OfflineAudioContext without an output device',metrics:{frames:mock.stats.frames,audioBytes:mock.stats.audioBytes,nonzero:mock.stats.nonzero}},null,2));
