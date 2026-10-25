@@ -4,6 +4,8 @@ import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver
 import {Utterances,enqueuePiece,LIVE_QUEUE_LIMIT,pieceParts,pieceTraceIds,type SpeechPiece} from './core/utterances';
 import {SpeechDiagnostics,diagnosticSettings,type SpeechTrace} from './core/speech-diagnostics';
 import {liveContext} from './core/live-translate';
+import {RateLimitError} from './core/provider';
+import {rateLimitBackoffMs} from './core/rate-limit';
 const SKIP_AFTER_MS=12000,EXPIRE_AFTER_MS=15000,TRANSLATION_TIMEOUT_MS=12000;
 export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number,observer?:TranslationObserver)=>Promise<TranslationResult>;cancel:(taskId:string)=>void}){
   let state:SpeechStatus={...IDLE_SPEECH},config:PublicConfig,queue:SpeechPiece[]=[],busy=false,epoch=0,context='',shownOrder=-1;
@@ -24,7 +26,8 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     },Math.max(0,due-now));
   }
   function enqueue(pieces:SpeechPiece[]){for(let piece of pieces){if(translatedPieces.get(piece.id)===piece.text)continue;const meta=sourceMeta.get(piece.id.slice(0,piece.id.lastIndexOf(':'))),traceId=crypto.randomUUID();piece={...piece,traceId,sourceEndAt:meta?.sourceEndAt};diagnostics.add({id:traceId,createdAt:piece.at,sourceChars:piece.text.length,...(meta?{commitMs:Math.max(0,piece.at-meta.receivedAt)}:{}),...(meta?.sourceEndAt!==undefined?{asrMs:Math.max(0,meta.receivedAt-meta.sourceEndAt)}:{})});const prior=queue;latest.delete(piece.id);latest.set(piece.id,piece.text);queue=enqueuePiece([...queue],{...piece,context:liveContext(context,piece.context??'')});for(const old of prior)for(const id of pieceTraceIds(old)){if(queue.some(p=>pieceTraceIds(p).includes(id)))continue;const part=pieceParts(old).find(p=>p.traceId===id);diagnostics.update(id,{outcome:part?.id===piece.id?'stale':'skipped'});}while(latest.size>128){const key=latest.keys().next().value!;latest.delete(key);translatedPieces.delete(key);}}void pump();}
-  let lock=Promise.resolve<unknown>(undefined),testing=false;
+  let lock=Promise.resolve<unknown>(undefined),testing=false,rateLimitStreak=0;
+  const wait=(ms:number)=>new Promise<void>(resolve=>{setTimeout(resolve,ms);});
   const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(isSpeechStatus(data.speechState))state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
     const contexts=await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]});
     if(!contexts.length&&['active','connecting'].includes(state.state)){state={...state,state:'stopped',message:'上次音频会话已中断，请重新开启。'};await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});}
@@ -36,7 +39,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   const command=(extra:Record<string,unknown>)=>chrome.runtime.sendMessage({target:'speech-offscreen',...extra});
   const caption=(data:Record<string,unknown>)=>state.tabId<0?Promise.resolve():chrome.tabs.sendMessage(state.tabId,{type:'video:live-caption',sessionId:state.sessionId,...data},{frameId:0}).catch(()=>{});
   async function stop(message='实时语音翻译已停止。',error=false,hint=''){
-    epoch++;clearTailTimer();inflight=undefined;for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';queue=[];busy=false;utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();deps.cancel(`subtitle-live-${state.sessionId}`);
+    epoch++;rateLimitStreak=0;clearTailTimer();inflight=undefined;for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';queue=[];busy=false;utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();deps.cancel(`subtitle-live-${state.sessionId}`);
     try{if((await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]})).length){await command({action:'stop'});await chrome.offscreen.closeDocument();}}catch{ /* Closing a tab may have already released capture. */ }
     await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});
     await caption(hint?{stop:true,hint:hint.slice(0,200)}:{stop:true});state={...state,state:error?'error':'stopped',message};await chrome.action.setBadgeText({tabId:state.tabId>=0?state.tabId:undefined,text:''}).catch(()=>{});await persist();return state;
@@ -49,7 +52,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     busy=true;const run=epoch,sessionId=state.sessionId,tabId=state.tabId,started=Date.now(),queueMs=started-item.at,requestId=crypto.randomUUID(),traceId=item.traceId!;let networkAt=started,firstTextAt=0;
     for(const part of parts)if(part.traceId)diagnostics.update(part.traceId,{queueMs:Math.max(0,started-part.at)});
     inflight={id:item.id,version:requestId,traceId,traceIds:traces};
-    const timeout=setTimeout(()=>{if(run===epoch){deps.cancel(`subtitle-live-${sessionId}`);note({outcome:'failed'});for(const queued of queue)for(const id of pieceTraceIds(queued))diagnostics.update(id,{outcome:'skipped'});epoch++;queue=[];busy=false;void caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译超时，请点击重新开始，或更换更快的翻译模型。';void persist();}},TRANSLATION_TIMEOUT_MS);
+    const timeout=setTimeout(()=>{if(run===epoch){deps.cancel(`subtitle-live-${sessionId}`);note({outcome:'failed'});for(const queued of queue)for(const id of pieceTraceIds(queued))diagnostics.update(id,{outcome:'skipped'});epoch++;queue=[];busy=false;inflight=undefined;void caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译超时，已跳过，继续识别。';void persist();}},TRANSLATION_TIMEOUT_MS);
     const unchanged=()=>parts.every(part=>latest.get(part.id)===part.text);
     const valid=()=>run===epoch&&state.state==='active'&&unchanged()&&item.order>=shownOrder;
     try{
@@ -64,11 +67,27 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);
       if(!valid()){note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});return;}
       shownOrder=item.order;
+      rateLimitStreak=0;
       state.lastTranslation=result.segments[0].text;state.completed++;state.message='正在识别并翻译标签页声音。';
       const done=Date.now();note({outcome:'completed',translationMs:done-networkAt,cache:result.cached,...(!firstTextAt?{firstTextMs:done-networkAt}:{})});diagnostics.update(traceId,{targetChars:state.lastTranslation.length});
       state.timing={queueMs,translationMs:done-networkAt,textToCaptionMs:done-item.at};
       await caption({source:item.text,translation:state.lastTranslation,pieceId:item.id,version:requestId,traceId,sourceEndAt:item.sourceEndAt});await persist();
-    }catch{if(run===epoch){note({outcome:'failed'});await caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译失败，语音识别仍在继续。请检查翻译模型、Key 或余额。';await persist();}}
+    }catch(error){
+      clearTimeout(timeout);
+      if(run!==epoch)return;
+      note({outcome:'failed'});
+      await caption({failed:true,pieceId:item.id,version:requestId});
+      if(error instanceof RateLimitError){
+        state.message='请求过于频繁，稍候继续识别。';
+        await persist();
+        await wait(rateLimitBackoffMs(rateLimitStreak));
+        if(run===epoch)rateLimitStreak++;
+      }else{
+        rateLimitStreak=0;
+        state.message='文字翻译失败，语音识别仍在继续。请检查翻译模型、Key 或余额。';
+        await persist();
+      }
+    }
     finally{clearTimeout(timeout);if(run===epoch){inflight=undefined;busy=false;void pump();}}
   }
   async function start(test=false){

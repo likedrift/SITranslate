@@ -1,5 +1,7 @@
 import {describe,test} from 'node:test';import assert from 'node:assert/strict';
 import {createSpeechController} from '../src/speech-background.ts';
+import {RateLimitError} from '../src/core/provider.ts';
+import {rateLimitBackoffMs} from '../src/core/rate-limit.ts';
 import {LIVE_CONTEXT_CHARS} from '../src/core/live-translate.ts';
 import {DEFAULT_SPEECH,IDLE_SPEECH} from '../src/core/speech.ts';
 import {LiveReader} from '../src/core/live-reader.ts';
@@ -352,12 +354,97 @@ describe('live translation session',{concurrency:1},()=>{
       await speech.route(transcript('a','甲。'),offscreen);
       await speech.route(transcript('b','乙。'),offscreen);
       clock.advance(12000);
+      const timedOut=await speech.route({type:'speech:status'},ui) as {state:string;message:string};
+      assert.equal(timedOut.state,'active');
+      assert.equal(timedOut.message,'文字翻译超时，已跳过，继续识别。');
+      assert.equal(/重新开始/.test(timedOut.message),false);
       first.resolve();await drain(jobs);
       const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;outcome?:string}[];outcomes:Record<string,number>};
       assert.equal(report.rows.find(row=>row.sourceChars==='占位句。'.length)?.outcome,'failed');
       assert.equal(report.outcomes.skipped,2);assert.equal(report.outcomes.completed,0);
       assert.equal(seen.length,1);
+      await speech.route(transcript('next','下一句仍然要译。'),offscreen);
+      await drain(jobs);
+      assert.deepEqual(seen,['占位句。','下一句仍然要译。']);
+      const continued=await speech.route({type:'speech:status'},ui) as {state:string;message:string};
+      assert.equal(continued.state,'active');
+      assert.equal(continued.message,'正在识别并翻译标签页声音。');
     }finally{first.resolve();clock.restore();}
+  });
+  test('a rate limit waits out the backoff before the next live request and keeps recognition running',async()=>{
+    const captions:Record<string,unknown>[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000);
+    let calls=0;
+    const translate=(input:TranslationInput)=>{
+      calls++;
+      const text=input.blocks[0].segments[0].text;
+      if(text.startsWith('限流'))return Promise.reject(new RateLimitError('请求过于频繁，请稍后再试。'));
+      return Promise.resolve({segments:[{id:'live',text:'译：'+text}],cached:false,usage:{input:1,output:1,estimatedCost:0}});
+    };
+    const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('a','限流一。'),offscreen);
+      await flush();
+      const paused=await speech.route({type:'speech:status'},ui) as {state:string;message:string};
+      assert.equal(paused.state,'active');
+      assert.equal(paused.message,'请求过于频繁，稍候继续识别。');
+      assert.equal(/重新开始/.test(paused.message),false);
+      await speech.route(transcript('b','限流二。'),offscreen);
+      await flush();
+      assert.equal(calls,1);
+      clock.advance(rateLimitBackoffMs(0)-1);
+      await flush();
+      assert.equal(calls,1,'退避结束前不能发出下一次翻译');
+      clock.advance(1);
+      await flush();
+      assert.equal(calls,2);
+      await speech.route(transcript('c','恢复一句。'),offscreen);
+      await flush();
+      assert.equal(calls,2);
+      clock.advance(rateLimitBackoffMs(1)-1);
+      await flush();
+      assert.equal(calls,2);
+      clock.advance(1);
+      await flush();
+      assert.equal(calls,3);
+      const continued=await speech.route({type:'speech:status'},ui) as {state:string;message:string;completed:number};
+      assert.equal(continued.state,'active');
+      assert.equal(continued.message,'正在识别并翻译标签页声音。');
+      assert.equal(continued.completed,1);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {outcomes:Record<string,number>};
+      assert.equal(report.outcomes.failed,2);assert.equal(report.outcomes.completed,1);
+    }finally{clock.restore();}
+  });
+  test('a translation failure other than rate limiting continues without that pause',async()=>{
+    const captions:Record<string,unknown>[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000);
+    let calls=0;
+    const translate=(input:TranslationInput)=>{
+      calls++;
+      const text=input.blocks[0].segments[0].text;
+      if(calls===1)return Promise.reject(new Error('模型返回了空译文。'));
+      return Promise.resolve({segments:[{id:'live',text:'译：'+text}],cached:false,usage:{input:1,output:1,estimatedCost:0}});
+    };
+    const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('a','失败一句。'),offscreen);
+      await flush();
+      const failed=await speech.route({type:'speech:status'},ui) as {state:string;message:string};
+      assert.equal(failed.state,'active');
+      assert.match(failed.message,/语音识别仍在继续/);
+      assert.equal(/重新开始/.test(failed.message),false);
+      await speech.route(transcript('b','下一句。'),offscreen);
+      await flush();
+      assert.equal(calls,2);
+      clock.advance(0);
+      const continued=await speech.route({type:'speech:status'},ui) as {state:string;message:string};
+      assert.equal(continued.state,'active');
+      assert.equal(continued.message,'正在识别并翻译标签页声音。');
+    }finally{clock.restore();}
   });
 });
 function speechLocal(){

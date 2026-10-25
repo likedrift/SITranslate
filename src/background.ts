@@ -1,7 +1,7 @@
 import {DEFAULT_SETTINGS, configFor, isPageStatus, isVideoStatus, pageStatusOrIdle, videoStatusOrEmpty, type Settings, type TranslationInput, type TranslationResult,type TranslationObserver} from './core/types';
 import {endpointFor,validateSettings,validateInput} from './core/validation';
 import {Scheduler} from './core/scheduler';
-import {adapterFor,ProviderError} from './core/provider';
+import {adapterFor,retryDelayMs} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
@@ -115,7 +115,7 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       let result;
       try{for(let attempt=0;attempt<2;attempt++){
         try{result=await adapterFor(profile).translate(profile,networkInput,networkSignal,progress);break;}
-        catch(error){if(attempt===0&&error instanceof ProviderError&&error.retryable){await new Promise<void>((resolve,reject)=>{const timeout=setTimeout(()=>{networkSignal.removeEventListener('abort',abort);resolve();},1500);const abort=()=>{clearTimeout(timeout);reject(new DOMException('已取消','AbortError'));};networkSignal.addEventListener('abort',abort,{once:true});if(networkSignal.aborted)abort();});continue;}throw error;}
+        catch(error){const delay=retryDelayMs(error,attempt);if(delay!==undefined){await new Promise<void>((resolve,reject)=>{const timeout=setTimeout(()=>{networkSignal.removeEventListener('abort',abort);resolve();},delay);const abort=()=>{clearTimeout(timeout);reject(new DOMException('已取消','AbortError'));};networkSignal.addEventListener('abort',abort,{once:true});if(networkSignal.aborted)abort();});continue;}throw error;}
       }}finally{clearProgress();networkSignal.removeEventListener('abort',clearProgress);}
       if(!result)throw new Error('翻译失败。');
       if(networkSignal.aborted)throw new DOMException('已取消','AbortError');
