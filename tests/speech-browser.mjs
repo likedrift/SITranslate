@@ -154,6 +154,24 @@ try{
     mock.setReadyDelay(250);const frames=mock.stats.frames,started=mock.stats.streamingStarts,finished=mock.stats.streamingFinishes;await rpc('speech:test');await until(async()=>(await rpc('speech:status')).state==='stopped');await until(()=>mock.stats.streamingFinishes>finished);
     assert.match((await rpc('speech:status')).message,/连接成功/);assert.equal(mock.stats.frames,frames);assert.equal(mock.stats.streamingStarts,started+1);assert.equal(mock.stats.urls.at(-1),'/api-ws/v1/inference');assert.deepEqual(mock.stats.lastRun.payload.parameters.language_hints,['ja']);assert.equal(mock.stats.lastRun.payload.parameters.max_sentence_silence,600);assert.equal(mock.stats.lastRun.payload.input.context[0].content[0].text,'出演者は山田太郎です。');assert.equal((await worker.evaluate(()=>chrome.declarativeNetRequest.getSessionRules())).length,0);
   });
+  await step('Frames captured before streaming ready are flushed afterwards and capped at about two seconds',async()=>{
+    const premature=mock.stats.prematureFrames,readyMark=mock.stats.lastReadyAt,frames=mock.stats.frames;
+    mock.setReadyDelay(4500);
+    try{
+      await page.locator('#silent-audio').click();await activate();await rpc('speech:start');
+      await until(()=>mock.stats.lastReadyAt>readyMark&&mock.stats.frames>frames);
+      await new Promise(r=>setTimeout(r,1200));
+      assert.equal(mock.stats.prematureFrames,premature);
+      // 100 ms frames. The cap is 20; the next ~1s of live audio is still inside this opening window.
+      console.log(`opening buffer: ${mock.stats.openingFrames} frames, ${mock.stats.openingBytes} bytes`);
+      assert.ok(mock.stats.openingFrames>=20&&mock.stats.openingFrames<=36,`opening burst ${mock.stats.openingFrames} frames is outside about 2s plus the observation window`);
+      assert.ok(mock.stats.openingBytes>=20*3200&&mock.stats.openingBytes<=36*3200,`opening PCM bytes ${mock.stats.openingBytes}`);
+      await rpc('speech:stop');
+      const stoppedFrames=mock.stats.frames,stoppedPremature=mock.stats.prematureFrames;
+      mock.setReadyDelay(8000);await rpc('speech:start');await new Promise(r=>setTimeout(r,700));await rpc('speech:stop');await new Promise(r=>setTimeout(r,400));
+      assert.equal(mock.stats.frames,stoppedFrames);assert.equal(mock.stats.prematureFrames,stoppedPremature);
+    }finally{mock.setReadyDelay(0);await rpc('speech:stop').catch(()=>{});}
+  });
   await step('Streaming captures real binary PCM only after task-started and exposes timestamps and cumulative usage',async()=>{
     const binary=mock.stats.binaryFrames,legacy=mock.stats.legacyFrames;await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).lastTranslation==='大家好。'&&!!(await rpc('speech:status')).asrUsage);
     assert.ok(mock.stats.binaryFrames>binary);assert.equal(mock.stats.legacyFrames,legacy);assert.equal(mock.stats.prematureFrames,0);assert.equal(mock.stats.protocolErrors,0);assert.deepEqual((await rpc('speech:status')).sourceTime,{beginMs:0,endMs:1800});assert.deepEqual((await rpc('speech:status')).asrUsage,{inputTokens:85,outputTokens:6,totalTokens:91});
