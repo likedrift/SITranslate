@@ -52,11 +52,9 @@
           </label>
           <label class="wide">模型名称<input id="model" maxlength="120" placeholder="服务商支持的模型名称"></label>
         </div>
-        <div class="switch-list">
-          <label class="switch-row"><span class="switch-text">设为默认服务</span><span class="switch"><input id="is-active" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row"><span class="switch-text">流式响应</span><span class="switch"><input id="stream" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row" title="仅在服务商支持时开启"><span class="switch-text">JSON 模式</span><span class="switch"><input id="json-mode" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row" id="thinking-row"><span class="switch-text">关闭推理</span><span class="switch"><input id="disable-thinking" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+        <div class="row provider-actions">
+          <button type="button" class="secondary" id="test">保存并测试连接</button>
+          <span id="test-result" class="field-status" role="status"></span>
         </div>
         <details class="cost">
           <summary>费用估算</summary>
@@ -65,9 +63,11 @@
             <label>输出单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="output-price" placeholder="0 表示不估算"></label>
           </div>
         </details>
-        <div class="row">
-          <button type="button" class="secondary" id="test">保存并测试连接</button>
-          <span id="test-result" class="field-status" role="status"></span>
+        <div class="switch-list">
+          <label class="switch-row"><span class="switch-text">设为默认服务</span><span class="switch"><input id="is-active" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row"><span class="switch-text">流式响应</span><span class="switch"><input id="stream" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row" title="仅在服务商支持时开启"><span class="switch-text">JSON 模式</span><span class="switch"><input id="json-mode" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row" id="thinking-row"><span class="switch-text">关闭推理</span><span class="switch"><input id="disable-thinking" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
         </div>
       </section>
     </form>
