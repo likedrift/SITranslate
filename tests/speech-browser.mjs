@@ -88,11 +88,12 @@ try{
     await activate();await popup.reload();await until(async()=>await popup.locator('#speech-timing').isVisible());assert.match(await popup.locator('#speech-timing').textContent(),/识别文本确认后/);
     translationDelay=0;await rpc('speech:stop');
   });
-  await step('Slow translation keeps only the latest three pending sentences instead of accumulating a live backlog',async()=>{
+  await step('Slow translation merges adjacent short pending sentences instead of dropping them',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).completed>0);translationDelay=1000;const before=requests.length;
     const emit=n=>mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'bounded-'+n,transcript:`検証待機${n}。`});emit(1);await until(()=>requests.length>before);
     for(let n=2;n<=6;n++){emit(n);await new Promise(r=>setTimeout(r,25));}
-    await until(async()=> (await rpc('speech:status')).lastTranslation==='译：検証待機6。');assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証待機1。','検証待機4。','検証待機5。','検証待機6。']);translationDelay=0;await rpc('speech:stop');
+    const merged=[2,3,4,5,6].map(n=>`検証待機${n}。`).join('');
+    await until(async()=> (await rpc('speech:status')).lastTranslation==='译：'+merged);assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証待機1。',merged]);translationDelay=0;await rpc('speech:stop');
   });
   await step('Worker restart keeps the capture session and restores its translation configuration',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');

@@ -79,10 +79,10 @@ test('Unfinished tails are due 800 ms after the last commit and later partials d
   const short=new Utterances();short.update('three','あいうえお',false,0);assert.equal(short.nextTailFlushAt(),undefined);
   const done=new Utterances();done.update('four','今日は晴れです。',false,0);assert.equal(done.nextTailFlushAt(),undefined);
 });
-test('Pending corrections replace the same piece, retain newest three, and preserve distinct identical utterances',()=>{
-  const p=(id:string,order:number,text=id):SpeechPiece=>({id,order,text,final:true,at:0});let queue:SpeechPiece[]=[];
-  queue=enqueuePiece(queue,p('one',0));queue=enqueuePiece(queue,p('one',0,'updated'));assert.equal(queue.length,1);assert.equal(queue[0].text,'updated');
-  for(let i=1;i<5;i++)queue=enqueuePiece(queue,p(String(i),i));assert.deepEqual(queue.map(p=>p.order),[2,3,4]);
+test('Pending corrections replace the same piece, retain newest three long lines, and preserve distinct identical utterances',()=>{
+  const long=(id:string,order:number,text='あ'.repeat(40)):SpeechPiece=>({id,order,text,final:true,at:0});let queue:SpeechPiece[]=[];
+  queue=enqueuePiece(queue,long('one',0));queue=enqueuePiece(queue,long('one',0,'い'.repeat(40)));assert.equal(queue.length,1);assert.equal(queue[0].text,'い'.repeat(40));assert.equal(queue[0].parts,undefined);
+  for(let i=1;i<5;i++)queue=enqueuePiece(queue,long(String(i),i));assert.deepEqual(queue.map(p=>p.order),[2,3,4]);
   const u=new Utterances();assert.notEqual(u.update('one','同じです。',true,0)[0].id,u.update('two','同じです。',true,1)[0].id);
 });
 test('Final correction does not replay older committed sentences',()=>{

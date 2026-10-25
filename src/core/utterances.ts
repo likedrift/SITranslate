@@ -1,5 +1,5 @@
 import {LIVE_CONTEXT_CHARS} from './live-translate';
-export interface SpeechPiece {id:string;order:number;text:string;final:boolean;at:number;context?:string;traceId?:string;sourceEndAt?:number}
+export interface SpeechPiece {id:string;order:number;text:string;final:boolean;at:number;context?:string;traceId?:string;sourceEndAt?:number;parts?:SpeechPiece[]}
 interface Item {text:string;final:boolean;lastAt:number;emitted:Map<number,string>;base:number}
 interface Chunk {text:string;complete:boolean}
 // Confirmed prefixes only. Draft suffixes never trigger translation.
@@ -64,7 +64,54 @@ export class Utterances {
   }
 }
 export const LIVE_QUEUE_LIMIT=3;
+// Fragments already bounded by one utterance chunk can share a request. The queue still keeps
+// LIVE_QUEUE_LIMIT entries afterwards. A merged entry is timed from its earliest fragment, and
+// fragments more than LIVE_MERGE_SPAN_MS apart stay separate so a fresh line is not expired with an older neighbor.
+export const LIVE_MERGE_CHARS=UTTERANCE_CHUNK_CHARS;
+export const LIVE_MERGED_CHARS=UTTERANCE_CHUNK_CHARS*2;
+export const LIVE_MERGE_SPAN_MS=3000;
+export function pieceParts(piece:SpeechPiece):SpeechPiece[]{return piece.parts?.length?piece.parts:[piece];}
+export function pieceTraceIds(piece:SpeechPiece):string[]{
+  const ids:string[]=[];
+  for(const part of pieceParts(piece))if(part.traceId&&!ids.includes(part.traceId))ids.push(part.traceId);
+  if(piece.traceId&&!ids.includes(piece.traceId))ids.unshift(piece.traceId);
+  return ids;
+}
+function pieceChars(text:string){return Array.from(text).length;}
+function joinPieceText(parts:{text:string}[]){
+  let out='';
+  for(const part of parts){if(out&&/[A-Za-z0-9]$/.test(out)&&/^[A-Za-z0-9]/.test(part.text))out+=' ';out+=part.text;}
+  return out;
+}
+function flattenPieces(queue:SpeechPiece[]){
+  const flat:SpeechPiece[]=[];
+  for(const piece of queue){
+    if(piece.parts?.length)for(const part of piece.parts)flat.push({...part,parts:undefined});
+    else flat.push({...piece,parts:undefined});
+  }
+  return flat;
+}
+function mergeParts(parts:SpeechPiece[]):SpeechPiece{
+  const first=parts[0],last=parts[parts.length-1],sourceEndAt=[...parts].reverse().find(part=>part.sourceEndAt!==undefined)?.sourceEndAt;
+  // order is the last fragment so a displayed group moves the cursor past every included line.
+  return {id:first.id,order:last.order,text:joinPieceText(parts),final:parts.every(part=>part.final),at:Math.min(...parts.map(part=>part.at)),context:first.context,traceId:first.traceId,...(sourceEndAt!==undefined?{sourceEndAt}:{}),parts:parts.map(part=>({...part,parts:undefined}))};
+}
+function canAppend(group:SpeechPiece[],piece:SpeechPiece){
+  const last=group[group.length-1],newest=Math.max(piece.at,...group.map(part=>part.at)),oldest=Math.min(piece.at,...group.map(part=>part.at));
+  if(pieceChars(piece.text)>LIVE_MERGE_CHARS||piece.order<=last.order||newest-oldest>LIVE_MERGE_SPAN_MS)return false;
+  return pieceChars(joinPieceText([...group,piece]))<=LIVE_MERGED_CHARS;
+}
+export function coalesceShortPieces(pieces:SpeechPiece[]){
+  const sorted=[...pieces].sort((a,b)=>a.order-b.order||a.at-b.at),out:SpeechPiece[]=[];let group:SpeechPiece[]=[];
+  const flush=()=>{if(group.length===1)out.push(group[0]);else if(group.length>1)out.push(mergeParts(group));group=[];};
+  for(const piece of sorted){
+    if(group.length&&!canAppend(group,piece))flush();
+    if(pieceChars(piece.text)<=LIVE_MERGE_CHARS)group.push(piece);else{flush();out.push(piece);}
+  }
+  flush();return out;
+}
 export function enqueuePiece(queue:SpeechPiece[],piece:SpeechPiece){
-  const index=queue.findIndex(p=>p.id===piece.id);if(index>=0)queue[index]=piece;else queue.push(piece);
-  queue.sort((a,b)=>a.order-b.order);return queue.slice(-LIVE_QUEUE_LIMIT);
+  const flat=flattenPieces(queue),index=flat.findIndex(item=>item.id===piece.id);
+  if(index>=0)flat[index]={...piece,parts:undefined};else flat.push({...piece,parts:undefined});
+  return coalesceShortPieces(flat).slice(-LIVE_QUEUE_LIMIT);
 }
