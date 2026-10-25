@@ -93,3 +93,7 @@ test('Japanese quote endings stay with the sentence, context preserves previous 
   const u=new Utterances(),pieces=u.update('quote','「そうです。」続きです。',true,0);assert.deepEqual(pieces.map(p=>p.text),['「そうです。」','続きです。']);assert.equal(pieces[1].context,'「そうです。」');
   const many=u.update('many','短。'.repeat(200),true,1),next=u.update('next','次の発言です。',true,2);assert.ok(next[0].order>many.at(-1)!.order);
 });
+test('Utterance items stay capped at 32 across a long run of distinct item ids',()=>{
+  const u=new Utterances();for(let i=0;i<80;i++)u.update(`id-${i}`,'一句。',true,i);assert.equal(u.size,32);assert.equal(u.emittedCount,32);
+  assert.equal(u.update('id-0','一句。',true,80).length,1);assert.equal(u.size,32);assert.equal(u.emittedCount,32);
+});
