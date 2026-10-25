@@ -35,7 +35,8 @@ export class Utterances {
     return result;
   }
 }
+export const LIVE_QUEUE_LIMIT=3;
 export function enqueuePiece(queue:SpeechPiece[],piece:SpeechPiece){
   const index=queue.findIndex(p=>p.id===piece.id);if(index>=0)queue[index]=piece;else queue.push(piece);
-  queue.sort((a,b)=>a.order-b.order);return queue.slice(-3);
+  queue.sort((a,b)=>a.order-b.order);return queue.slice(-LIVE_QUEUE_LIMIT);
 }

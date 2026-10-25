@@ -9,7 +9,7 @@ export function mockASR(server){
     const result=(sentence,usage)=>send(socket,{header:{event:'result-generated',task_id:session.taskId},payload:{output:{sentence},...(usage?{usage}:{})}});
     let audioMs=0;const frame=pcm=>{if(!session.ready){stats.prematureFrames++;return;}audioMs+=pcm.length/32;stats.audioMs=audioMs;stats.frames++;stats.audioBytes+=pcm.length;stats.nonzero ||= pcm.some(x=>x!==0);
       if(!sent&&stats.frames>3){sent=true;if(session.streaming){result({sentence_id:1,begin_time:0,end_time:null,sentence_end:false,text:'皆さん、こんにちは。',words:[{text:'皆さん、',fixed:true},{text:'こんにちは。',fixed:false}]});result({sentence_id:1,begin_time:0,end_time:1800,sentence_end:true,text:'皆さん、こんにちは。'},{input_tokens:85,output_tokens:6});}
-        else{send(socket,{type:'conversation.item.input_audio_transcription.text',item_id:'one',text:'皆さん、',stash:'こんにちは。'});send(socket,{type:'conversation.item.input_audio_transcription.completed',item_id:'one',transcript:'皆さん、こんにちは。'});}}
+        else{send(socket,{type:'input_audio_buffer.speech_stopped',item_id:'one',audio_end_ms:Math.max(0,Math.floor(audioMs))});send(socket,{type:'conversation.item.input_audio_transcription.text',item_id:'one',text:'皆さん、',stash:'こんにちは。'});send(socket,{type:'conversation.item.input_audio_transcription.completed',item_id:'one',transcript:'皆さん、こんにちは。'});}}
     };
     socket.on('data',chunk=>{pending=Buffer.concat([pending,chunk]);if(pending.length>1000000){socket.destroy();return;}
       while(pending.length>=2){const opcode=pending[0]&15,masked=!!(pending[1]&128);let length=pending[1]&127,offset=2;if(length===126){if(pending.length<4)return;length=pending.readUInt16BE(2);offset=4;}if(length===127){socket.destroy();return;}if(masked)offset+=4;if(pending.length<offset+length)return;

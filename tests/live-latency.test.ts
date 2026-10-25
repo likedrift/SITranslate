@@ -2,7 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';
 import {streamSegment} from '../src/core/stream-text.ts';
 import {LiveReader,readingMs,type LiveCaption} from '../src/core/live-reader.ts';
 import {AudioClock} from '../src/core/audio-clock.ts';
-import {SpeechDiagnostics} from '../src/core/speech-diagnostics.ts';
+import {SpeechDiagnostics,diagnosticSettings} from '../src/core/speech-diagnostics.ts';
 const prefix='{"segments":[{"id":"live","text":"';
 test('Incremental translation decoding exposes real text before final JSON and handles escapes across chunks',()=>{
   assert.equal(streamSegment(prefix+'你','live'),'你');assert.equal(streamSegment(prefix+'你好\\n世','live'),'你好\n世');assert.equal(streamSegment(prefix+'你\\u4f','live'),'你');assert.equal(streamSegment(prefix+'你\\u4f60\\uD83D','live'),'你你');assert.equal(streamSegment(prefix+'\\uD83D\\uDE00','live'),'😀');
@@ -33,5 +33,13 @@ test('ASR clock maps server timestamps to uploaded audio metadata and resets at 
   const c=new AudioClock();c.upload(1600,1100);c.upload(1600,1200);assert.equal(c.endAt(150),1150);assert.equal(c.endAt(250),undefined);assert.equal(c.endAt(NaN),undefined);c.reset();assert.equal(c.endAt(150),undefined);for(let i=0;i<400;i++)c.upload(1600,10000+i*100);assert.equal(c.endAt(1),undefined);
 });
 test('Local diagnostics keep at most 100 numeric samples, exclude unknown metrics, and compute measured percentiles',()=>{
-  const d=new SpeechDiagnostics();for(let i=0;i<120;i++)d.add({id:String(i),createdAt:i,sourceChars:20,firstTextMs:i*10});const report=d.report();assert.equal(report.samples,100);assert.equal(report.metrics.firstTextMs.samples,100);assert.equal(report.metrics.firstTextMs.p50,690);assert.equal(report.metrics.firstTextMs.p95,1140);assert.ok(!report.metrics.asrMs);assert.ok(!JSON.stringify(report).includes('sourceText'));d.clear();assert.equal(d.report().samples,0);
+  const d=new SpeechDiagnostics();for(let i=0;i<120;i++)d.add({id:String(i),createdAt:i,sourceChars:20,firstTextMs:i*10});const report=d.report();assert.equal(report.samples,100);assert.equal(report.metrics.firstTextMs.samples,100);assert.equal(report.metrics.firstTextMs.p50,690);assert.equal(report.metrics.firstTextMs.p95,1140);assert.ok(!report.metrics.asrMs);assert.equal(report.outcomes.pending,100);assert.ok(!JSON.stringify(report).includes('sourceText'));d.clear();assert.equal(d.report().samples,0);
+});
+test('Diagnostic reports count outcomes and comparison settings omit secrets and addresses',()=>{
+  const d=new SpeechDiagnostics();d.add({id:'a',createdAt:1,sourceChars:4,outcome:'completed',asrMs:120});d.add({id:'b',createdAt:2,sourceChars:4,outcome:'stale'});d.add({id:'c',createdAt:3,sourceChars:4});
+  const report=d.report();assert.equal(report.schema,2);assert.deepEqual(report.outcomes,{completed:1,failed:0,stale:1,skipped:0,cancelled:0,pending:1});assert.equal(report.metrics.asrMs.samples,1);
+  const settings=diagnosticSettings({asrModel:'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',language:'ja',textModel:'deepseek-flash',textStream:false,readingMode:'live',target:'zh-Hans'});
+  assert.equal(settings.asrModel,undefined);assert.equal(settings.language,'ja');assert.equal(settings.textModel,'deepseek-flash');assert.equal(settings.textStream,false);assert.equal(settings.readingMode,'live');assert.equal(settings.target,'zh-Hans');
+  assert.equal(diagnosticSettings({asrModel:'qwen3-asr-flash-realtime',language:'ja',textModel:'https://evil.example/model',readingMode:'fast',target:'not a language'}).textModel,undefined);
+  assert.ok(!JSON.stringify(settings).includes('dashscope'));
 });

@@ -1,6 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {DEFAULT_SPEECH,STREAMING_MODEL,normalizeSpeech,validateSpeech,speechAuthRule,speechUrl} from '../src/core/speech.ts';
 import {speechProtocol} from '../src/core/speech-protocol.ts';
+import {AudioClock} from '../src/core/audio-clock.ts';
 const streaming={...DEFAULT_SPEECH,model:STREAMING_MODEL,endpoint:'wss://workspace.cn-beijing.maas.aliyuncs.com/api-ws/v1/inference',context:'番組のゲストは山田太郎です。'};
 const result=(sentence:any,usage?:any)=>({header:{task_id:'task',event:'result-generated'},payload:{output:{sentence},usage}});
 test('Both ASR families normalize paths without changing region, workspace, key or model selection',()=>{
@@ -31,4 +32,21 @@ test('Task IDs, heartbeats, missing IDs and malformed usage never create acciden
 test('Legacy protocol preserves base64 PCM and confirmed text / draft semantics',()=>{
   const p=speechProtocol(DEFAULT_SPEECH),frame=p.audio(new Uint8Array([1,2])) as any;assert.equal(frame.type,'input_audio_buffer.append');assert.equal(frame.audio,'AQI=');assert.equal((p.start as any).type,'session.update');
   assert.deepEqual(p.parse({type:'conversation.item.input_audio_transcription.text',item_id:'one',text:'確認済',stash:'草稿'}),[{kind:'transcript',itemId:'one',text:'確認済',preview:'草稿',final:false}]);
+});
+test('Legacy speech_stopped audio_end_ms is kept for that item and can map to an uploaded frame',()=>{
+  const p=speechProtocol(DEFAULT_SPEECH);
+  assert.deepEqual(p.parse({type:'input_audio_buffer.speech_stopped',audio_end_ms:150,item_id:'one'}),[]);
+  assert.deepEqual(p.parse({type:'input_audio_buffer.speech_stopped',audio_end_ms:-1,item_id:'bad'}),[]);
+  assert.deepEqual(p.parse({type:'input_audio_buffer.speech_stopped',audio_end_ms:150}),[]);
+  const partial=p.parse({type:'conversation.item.input_audio_transcription.text',item_id:'one',text:'確認済',stash:'草稿'})[0];
+  assert.equal(partial.kind,'transcript');if(partial.kind==='transcript')assert.equal(partial.audioEndMs,150);
+  const done=p.parse({type:'conversation.item.input_audio_transcription.completed',item_id:'one',transcript:'確認済です。'})[0];
+  assert.equal(done.kind,'transcript');if(done.kind==='transcript')assert.equal(done.audioEndMs,150);
+  const other=p.parse({type:'conversation.item.input_audio_transcription.completed',item_id:'two',transcript:'別件'})[0];
+  assert.equal(other.kind,'transcript');if(other.kind==='transcript')assert.equal(other.audioEndMs,undefined);
+  const direct=p.parse({type:'conversation.item.input_audio_transcription.completed',item_id:'three',transcript:'直接',audio_end_ms:1800})[0];
+  assert.equal(direct.kind,'transcript');if(direct.kind==='transcript')assert.equal(direct.audioEndMs,1800);
+  const clock=new AudioClock();clock.upload(1600,1100);clock.upload(1600,1200);
+  if(done.kind==='transcript')assert.equal(clock.endAt(done.audioEndMs??-1),1150);
+  assert.deepEqual(speechProtocol(DEFAULT_SPEECH).parse({type:'conversation.item.input_audio_transcription.completed',item_id:'one',transcript:'無関係'}),[{kind:'transcript',itemId:'one',text:'無関係',preview:'',final:true}]);
 });
