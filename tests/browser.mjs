@@ -235,7 +235,7 @@ try{
     await page.goto(`${origin}/video`);await until(async()=>await page.locator('video').evaluate(v=>Number.isFinite(v.duration)));
     const before=requests.length;await new Promise(resolve=>setTimeout(resolve,300));assert.equal(requests.length,before);
     assert.equal(await page.evaluate(()=>!!globalThis.__siVideoTranslate),false);await activate();assert.equal((await rpc('video:status')).state,'idle');
-    await activate();await popup.reload();await popup.locator('#video-start').click();
+    await activate();await popup.reload();await popup.locator('#video-fold > summary').click();await popup.locator('#video-start').click();
     await until(async()=> (await captionText()).includes('你好，世界。'));
     const texts=requests.slice(before).flatMap(r=>r.blocks.flatMap(b=>b.segments.map(s=>s.text)));
     assert.ok(texts.includes('Second subtitle.'));assert.ok(!texts.includes('A late subtitle.'));

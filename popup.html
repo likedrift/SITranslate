@@ -30,7 +30,7 @@
       <label><input type="radio" name="display" value="bilingual"><span>双语对照</span></label>
     </fieldset>
     <button class="primary translate-button" id="translate" type="button">翻译此页</button>
-    <section class="progress-card" aria-live="polite">
+    <section class="progress-card" id="progress-card" hidden aria-live="polite">
       <div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div>
       <progress id="progress" value="0" max="1" aria-label="页面翻译进度"></progress>
       <p id="detail" hidden></p>
@@ -43,12 +43,9 @@
     <p class="notice" id="error" role="alert" hidden></p>
   </section>
 
-  <section class="panel">
-    <div class="panel-head">
-      <h2>实时语音</h2>
-      <button class="text-button compact" id="speech-settings" type="button">语音设置</button>
-    </div>
-    <p id="speech-state" class="status" aria-live="polite">未开始</p>
+  <details class="fold feature" id="speech-fold">
+    <summary><span>实时语音</span><button class="text-button compact" id="speech-settings" type="button">语音设置</button></summary>
+    <p id="speech-state" class="status" aria-live="polite" hidden>未开始</p>
     <p id="speech-timing" class="status" hidden></p>
     <p id="speech-usage" class="status" hidden></p>
     <p id="speech-stream-warning" class="notice" role="status" hidden></p>
@@ -56,11 +53,11 @@
       <button class="secondary" id="speech-start" type="button">开始实时翻译</button>
       <button class="text-button" id="speech-stop" type="button" disabled>停止音频</button>
     </div>
-  </section>
+  </details>
 
-  <section class="panel">
-    <div class="panel-head"><h2>视频字幕</h2></div>
-    <p id="video-state" class="status" aria-live="polite">正在读取字幕状态…</p>
+  <details class="fold feature" id="video-fold">
+    <summary>视频字幕</summary>
+    <p id="video-state" class="status" aria-live="polite" hidden>正在读取字幕状态…</p>
     <div class="row">
       <button class="secondary" id="video-start" type="button" disabled>正在读取字幕状态…</button>
       <button class="text-button" id="video-stop" type="button" disabled>停止</button>
@@ -73,7 +70,7 @@
         <span class="switch-ui" aria-hidden="true"></span>
       </span>
     </label>
-  </section>
+  </details>
 
   <details class="fold">
     <summary>字幕位置与显示</summary>
