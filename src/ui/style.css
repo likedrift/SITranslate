@@ -150,6 +150,7 @@ progress::-webkit-progress-bar { background: var(--surface-container-high); }
 progress::-webkit-progress-value { background: var(--primary); border-radius: 4px; }
 progress::-moz-progress-bar { background: var(--primary); }
 .progress-card p, .status { font-size: 12px; color: var(--muted); font-weight: 400; }
+.status.attention { color: var(--danger); }
 .actions button { min-height: 40px; }
 .panel { display: flex; flex-direction: column; gap: 4px; padding-top: 8px; border-top: 1px solid var(--outline-variant); }
 .panel-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; min-height: 40px; }

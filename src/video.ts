@@ -2,6 +2,7 @@ import {EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,type PublicConfig,type Trans
 import {cueIndex,activeSubtitle,subtitleText,type SubtitleCue} from './core/subtitles';
 import {DEFAULT_CAPTION,normalizeCaption,captionBounds,captionPages,clamp,resizeCaptionBox,type CaptionLayout,type CaptionBox,type CaptionCorner} from './core/caption-layout';
 import {LiveReader} from './core/live-reader';
+import {PAUSE_SCROLL_NOTE,liveInterruptHint} from './core/live-hints';
 
 // Loaded only after an explicit video action; ordinary pages do not load this module.
 const scope=globalThis as typeof globalThis&{__siVideoTranslate?:boolean};
@@ -15,7 +16,7 @@ function boot(){
   let entries=new Map<string,Entry>(),current:SubtitleCue[]=[],working=false,sequence=0;
   let youtube=false,videoId='',mediaSource='',captionText='',lastTime=0,lastSource='',lastError='';
   let captionChangedAt=0;
-  let liveSession='',liveShownAt=0;
+  let liveSession='',liveShownAt=0,endedSession='',restartHint='',ending=false,restartTimer:ReturnType<typeof setTimeout>|undefined;
   const reader=new LiveReader();let livePreview='',previousLine:HTMLDivElement|undefined,liveTools:HTMLDivElement|undefined,holdButton:HTMLButtonElement|undefined,liveHint:HTMLSpanElement|undefined;
   const painted=new Set<string>();let paintScheduled=false;
   let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),layoutEpoch=0,card:HTMLDivElement|undefined,handle:HTMLButtonElement|undefined,pager:HTMLDivElement|undefined;
@@ -27,7 +28,7 @@ function boot(){
   function cancel(){if(task)void rpc({type:'task:cancel',taskId:task}).catch(()=>{});task=`subtitle-${crypto.randomUUID()}`;generation++;working=false;for(const e of entries.values())if(e.state==='running')e.state='pending';}
   function listen(target:EventTarget,event:string,fn:()=>void){target.addEventListener(event,fn);disposers.push(()=>target.removeEventListener(event,fn));}
   function stop(message='字幕翻译已停止。'){
-    liveSession='';
+    liveSession='';endedSession='';restartHint='';ending=false;if(restartTimer)clearTimeout(restartTimer);restartTimer=undefined;
     reader.reset();painted.clear();livePreview='';previousLine=undefined;liveTools=undefined;paintScheduled=false;
     cancel();if(timer)clearInterval(timer);if(loadingTimer)clearTimeout(loadingTimer);timer=undefined;loadingTimer=undefined;
     for(const dispose of disposers.splice(0))dispose();
@@ -43,14 +44,14 @@ function boot(){
     host=document.createElement('div');host.dataset.siOwned='video';host.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;';
     const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
     for(const type of ['click','keydown','pointerdown'])shadow.addEventListener(type,e=>e.stopPropagation());
-    style.textContent=':host{all:initial;pointer-events:none}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{box-sizing:border-box;font:600 22px/1.45 system-ui,sans-serif;text-align:center;color:#fff;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 3px #000;padding:8px 14px;border-radius:10px}.source{font-size:.78em;font-weight:400;opacity:.88}.target{margin-top:3px}.target:empty{display:none}button{pointer-events:auto;font:12px system-ui,sans-serif;color:#fff;background:#252a36e8;border:1px solid #ffffff40;border-radius:6px;padding:3px 9px;cursor:pointer}button:focus-visible{outline:2px solid #bdc6ff;outline-offset:2px}.handle{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);cursor:grab;touch-action:none;user-select:none;opacity:.55;white-space:nowrap}.handle:hover,.handle:focus-visible{opacity:1}.pages{font:12px system-ui,sans-serif;margin-top:4px;display:flex;align-items:center;justify-content:center;gap:10px}';
+    style.textContent=':host{all:initial;pointer-events:none}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{box-sizing:border-box;font:600 22px/1.45 system-ui,sans-serif;text-align:center;color:#fff;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 3px #000;padding:8px 14px;border-radius:10px}.source{font-size:.78em;font-weight:400;opacity:.88}.target{margin-top:3px}.target:empty{display:none}button{pointer-events:auto;font:12px system-ui,sans-serif;color:#fff;background:#252a36e8;border:1px solid #ffffff40;border-radius:6px;padding:3px 9px;cursor:pointer}button:focus-visible{outline:2px solid #bdc6ff;outline-offset:2px}.handle{position:absolute;bottom:100%;left:50%;transform:translateX(-50%);cursor:grab;touch-action:none;user-select:none;opacity:.55;white-space:nowrap}.handle:hover,.handle:focus-visible{opacity:1}.pages{font:12px system-ui,sans-serif;margin-top:4px;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:8px 10px}.note{font-weight:400;opacity:.88}';
     style.textContent+='.caption{position:relative;display:flex;align-items:center;justify-content:center}.content{width:100%;min-width:0}.caption:not(.locked){pointer-events:auto;cursor:grab;touch-action:none;user-select:none}.caption.moving{cursor:grabbing}.resize{position:absolute;width:18px;height:18px;padding:0;border:0;background:transparent;touch-action:none;opacity:.55}.resize:after{content:"";position:absolute;inset:4px;border:solid #dce0ff;border-width:0 2px 2px 0;border-radius:1px}.resize:hover,.resize:focus-visible{opacity:1;background:#ffffff20}.nw{top:0;left:0;cursor:nwse-resize}.ne{top:0;right:0;cursor:nesw-resize}.sw{bottom:0;left:0;cursor:nesw-resize}.se{bottom:0;right:0;cursor:nwse-resize}.nw:after{transform:rotate(180deg)}.ne:after{transform:rotate(270deg)}.sw:after{transform:rotate(90deg)}.locked .resize{display:none}';
     card=document.createElement('div');card.className='caption';original=document.createElement('div');original.className='source';translated=document.createElement('div');translated.className='target';
     previousLine=document.createElement('div');previousLine.style.cssText='font-size:.78em;font-weight:400;opacity:.72;margin-bottom:6px';previousLine.hidden=true;
     liveTools=document.createElement('div');liveTools.className='pages';liveTools.hidden=true;
     const back=document.createElement('button'),forward=document.createElement('button'),latestButton=document.createElement('button');holdButton=document.createElement('button');liveHint=document.createElement('span');
     back.textContent='‹';back.setAttribute('aria-label','上一条译文');back.onclick=()=>{reader.back(Date.now());pageKey='';render();};forward.textContent='›';forward.setAttribute('aria-label','下一条译文');forward.onclick=()=>{reader.forward(Date.now());pageKey='';render();};
-    holdButton.onclick=()=>{reader.paused=!reader.paused;render();};latestButton.textContent='回到最新';latestButton.onclick=()=>{reader.latest(Date.now());pageKey='';render();};liveTools.append(back,holdButton,forward,latestButton,liveHint);
+    holdButton.onclick=()=>{reader.paused=!reader.paused;render();};const pauseNote=document.createElement('span');pauseNote.className='note';pauseNote.textContent=PAUSE_SCROLL_NOTE;latestButton.textContent='回到最新';latestButton.onclick=()=>{reader.latest(Date.now());pageKey='';render();};liveTools.append(back,holdButton,pauseNote,forward,latestButton,liveHint);
     handle=document.createElement('button');handle.className='handle';handle.textContent='⠿ 拖动字幕';handle.setAttribute('aria-label','拖动字幕位置，方向键可移动');
     pager=document.createElement('div');pager.className='pages';
     const previous=document.createElement('button'),next=document.createElement('button'),count=document.createElement('span');previous.textContent='‹';next.textContent='›';previous.setAttribute('aria-label','上一页字幕');next.setAttribute('aria-label','下一页字幕');
@@ -98,8 +99,41 @@ function boot(){
   function useLayout(next:CaptionLayout){layout=next;status.bilingual=layout.showOriginal;}
   async function ensureLayout(){const run=generation,epoch=layoutEpoch;try{const stored=(await chrome.storage.local.get('captionLayout')).captionLayout;if(run!==generation||epoch!==layoutEpoch)return;useLayout(normalizeCaption(stored));}catch{status.bilingual=layout.showOriginal;}}
   function savePosition(full:boolean){void rpc({type:'caption:position',context:full?'fullscreen':'normal',position:layout[full?'fullscreen':'normal']}).catch(()=>{});}
+  function videoSourceChanged(){
+    if(!video)return false;
+    if(mediaSource&&video.currentSrc&&video.currentSrc!==mediaSource)return true;
+    return youtube&&new URL(location.href).searchParams.get('v')!==videoId;
+  }
+  function placeHost(){
+    if(!host||!card)return;
+    const full=document.fullscreenElement,parent=full&&video?.isConnected&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
+    if(host.parentElement!==parent)parent.append(host);
+    const rect=video?.isConnected?video.getBoundingClientRect():new DOMRect(0,0,innerWidth,innerHeight);
+    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(21,25,35,${layout.opacity})`;
+    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;
+  }
+  function paintRestartHint(){
+    if(!host||!translated)return;
+    host.hidden=false;if(original)original.textContent='';translated.textContent=restartHint;translated.setAttribute('aria-live','polite');
+    if(previousLine)previousLine.hidden=true;if(pager)pager.hidden=true;if(liveTools)liveTools.hidden=true;placeHost();
+  }
+  function armRestartHint(text:string){
+    restartHint=text.slice(0,200);ending=true;status={...status,state:'stopped',message:restartHint};paintRestartHint();
+    if(restartTimer)clearTimeout(restartTimer);
+    restartTimer=setTimeout(()=>{restartHint='';stop('实时语音字幕已停止。');},7000);
+  }
+  function adoptHint(text:string){
+    endedSession=liveSession||endedSession;liveSession='';if(timer)clearInterval(timer);timer=undefined;
+    for(const dispose of disposers.splice(0))dispose();armRestartHint(text);
+  }
+  function interrupt(cause:'seek'|'video'){
+    if(!liveSession||ending)return;ending=true;endedSession=liveSession;const sessionId=liveSession;
+    armRestartHint(liveInterruptHint(cause));void rpc({type:'speech:stop',sessionId,cause}).catch(()=>{});
+  }
   function render(){
     status.bilingual=layout.showOriginal;
+    if(restartHint&&host&&translated){paintRestartHint();return;}
+    if(translated)translated.removeAttribute('aria-live');
     if(!host||!original||!translated||!card||!handle||!pager||(!video&&!liveSession))return;
     const full=document.fullscreenElement,parent=full&&video&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
@@ -213,15 +247,17 @@ function boot(){
       void (async()=>{
         await ensureLayout();if(run!==generation||liveSession!==sessionId){respond(true);return;}
         status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:layout.showOriginal};overlay();
-        const end=()=>{void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});};
-        if(video){listen(video,'seeking',end);listen(video,'emptied',end);}listen(document,'fullscreenchange',render);
-        timer=setInterval(()=>{if(video&&!video.isConnected){end();stop();return;}render();},250);render();respond(true);
+        youtube=!!video&&(location.hostname==='youtube.com'||location.hostname.endsWith('.youtube.com'))&&!!video.closest('#movie_player');
+        mediaSource=video?.currentSrc??'';videoId=new URL(location.href).searchParams.get('v')??'';
+        if(video){listen(video,'seeking',()=>interrupt('seek'));listen(video,'emptied',()=>interrupt('video'));}listen(document,'fullscreenchange',render);
+        timer=setInterval(()=>{if(ending){render();return;}if(liveSession&&video&&(!video.isConnected||videoSourceChanged()))interrupt('video');else render();},250);render();respond(true);
       })().catch(()=>{try{respond(false);}catch{}});
       return true;
     }
     if(m.type==='video:live-caption'){
-      if(m.sessionId!==liveSession){respond(false);return;}
-      if(m.stop){stop();respond(true);return;}
+      if(m.sessionId!==liveSession&&m.sessionId!==endedSession){respond(false);return;}
+      if(m.stop){if(typeof m.hint==='string'&&m.hint)adoptHint(m.hint);else stop();respond(true);return;}
+      if(ending){respond(true);return;}
       if(m.resetProvisional){for(const cue of [...reader.items])if(!cue.final)reader.withdraw(cue.id,cue.version,Date.now());render();respond(true);return;}
       if(m.preview){livePreview=String(m.source??'').slice(0,2000);render();respond(true);return;}
       if(m.failed){reader.withdraw(String(m.pieceId??'live'),String(m.version??''),Date.now());render();respond(true);return;}
@@ -234,5 +270,5 @@ function boot(){
     if(m.type==='video:retry'){lastError='';for(const e of entries.values())if(e.state==='failed')e.state='pending';tick();respond(status);return;}
     if(m.type==='video:start'){void start(m.config).then(()=>respond(status),error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';respond(status);});return true;}
   });
-  window.addEventListener('pagehide',()=>{if(liveSession)void rpc({type:'speech:stop',sessionId:liveSession}).catch(()=>{});stop();});
+  window.addEventListener('pagehide',()=>{if(liveSession)void rpc({type:'speech:stop',sessionId:liveSession,cause:'leave'}).catch(()=>{});stop();});
 }

@@ -51,6 +51,7 @@
     <p id="speech-state" class="status" aria-live="polite">未开始</p>
     <p id="speech-timing" class="status" hidden></p>
     <p id="speech-usage" class="status" hidden></p>
+    <p id="speech-stream-warning" class="notice" role="status" hidden></p>
     <div class="row">
       <button class="secondary" id="speech-start" type="button">开始实时翻译</button>
       <button class="text-button" id="speech-stop" type="button" disabled>停止音频</button>
@@ -83,6 +84,7 @@
         <option value="live">实时优先</option>
       </select>
     </label>
+    <p class="status" id="caption-pause-note"></p>
     <label>字幕范围
       <select id="caption-mode">
         <option value="video">视频内</option>
