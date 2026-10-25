@@ -1,4 +1,4 @@
-import {DEFAULT_SETTINGS, EMPTY_STATUS, EMPTY_VIDEO_STATUS, configFor, type Settings, type TranslationInput, type PageStatus, type TranslationResult,type TranslationObserver} from './core/types';
+import {DEFAULT_SETTINGS, configFor, isPageStatus, isVideoStatus, pageStatusOrIdle, videoStatusOrEmpty, type Settings, type TranslationInput, type TranslationResult,type TranslationObserver} from './core/types';
 import {endpointFor,validateSettings,validateInput} from './core/validation';
 import {Scheduler} from './core/scheduler';
 import {adapterFor,ProviderError} from './core/provider';
@@ -53,6 +53,7 @@ async function permissionsForProfiles(s:Settings){
 }
 async function safeConfig(){await initialized;return configFor(settings);}
 async function activeTab(){const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id===undefined||!/^https?:\/\//.test(tab.url??''))throw new Error('此页面无法翻译。请打开普通 HTTP 或 HTTPS 网页。');return tab;}
+async function pageStatus(tabId:number,live:unknown){if(isPageStatus(live))return live;const stored=await chrome.storage.session.get(`page:${tabId}`);return pageStatusOrIdle(undefined,stored[`page:${tabId}`]);}
 async function inject(tabId:number){await chrome.scripting.executeScript({target:{tabId},files:['content.js']});}
 async function tabAction(action:string,tabId?:number){
   if(!['start','stop','restore','retry','display'].includes(action))throw new Error('不支持的页面操作。');
@@ -171,7 +172,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   if(message.type==='page:config'&&pageSender(sender))return safeConfig();
   if(message.type==='page:status'&&pageSender(sender)){
     if(sender.frameId!==0)return;
-    const s=message.status as PageStatus;if(!s||!['idle','scanning','translating','watching','done','stopped'].includes(s.state)||!['total','completed','failed','chars'].every(k=>Number.isFinite(s[k as keyof PageStatus])&&Number(s[k as keyof PageStatus])>=0)||typeof s.message!=='string'||s.message.length>400)throw new Error('无效进度。');
+    const s=message.status;if(!isPageStatus(s)||s.message.length>400)throw new Error('无效进度。');
     await write({[`page:${sender.tab!.id}`]:s});return;
   }
   if(message.type==='task:heartbeat'&&(pageSender(sender)||ui))return true;
@@ -199,10 +200,12 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
       if(message.action==='display'||(message.action==='start'&&typeof message.bilingual==='boolean'))await saveCaption({showOriginal:message.bilingual!==false});
       const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
       const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
-      return chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
+      const replied=await chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
+      if(isVideoStatus(replied))return replied;
+      try{return videoStatusOrEmpty(await chrome.tabs.sendMessage(tab.id!,{type:'video:get-status'},{frameId:0}));}catch{return videoStatusOrEmpty(undefined);}
     }
-    case 'video:status':{const tab=await activeTab();try{return await chrome.tabs.sendMessage(tab.id!,{type:'video:get-status'},{frameId:0})??EMPTY_VIDEO_STATUS;}catch{return EMPTY_VIDEO_STATUS;}}
-    case 'tab:status':{const tab=await activeTab();try{return await chrome.tabs.sendMessage(tab.id!,{type:'page:get-status'},{frameId:0});}catch{const stored=await chrome.storage.session.get(`page:${tab.id}`);return {...EMPTY_STATUS,...stored[`page:${tab.id}`],state:'idle',message:''};}}
+    case 'video:status':{const tab=await activeTab();try{return videoStatusOrEmpty(await chrome.tabs.sendMessage(tab.id!,{type:'video:get-status'},{frameId:0}));}catch{return videoStatusOrEmpty(undefined);}}
+    case 'tab:status':{const tab=await activeTab();try{return await pageStatus(tab.id!,await chrome.tabs.sendMessage(tab.id!,{type:'page:get-status'},{frameId:0}));}catch{return pageStatus(tab.id!,undefined);}}
     case 'selection:origins':{const data=await chrome.storage.local.get('selectionOrigins');return data.selectionOrigins??[];}
     case 'selection:save':{
       if(!Array.isArray(message.origins)||message.origins.length>50)throw new Error('网站授权列表无效。');

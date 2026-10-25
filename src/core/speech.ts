@@ -5,6 +5,13 @@ export const STREAMING_MODEL='qwen-audio-3.1-asr-flash-streaming';
 export const isStreaming=(model:string)=>model===STREAMING_MODEL;
 export const DEFAULT_SPEECH:SpeechSettings={endpoint:'wss://dashscope.aliyuncs.com/api-ws/v1/realtime',apiKey:'',model:'qwen3-asr-flash-realtime',language:'ja',context:''};
 export const IDLE_SPEECH:SpeechStatus={state:'idle',sessionId:'',tabId:-1,message:'无需网站字幕，直接识别当前标签页声音。',seconds:0,sentBytes:0,hasAudio:false,completed:0,lastSource:'',lastTranslation:''};
+const SPEECH_STATES=['idle','connecting','active','stopped','error'] as const;
+export function isSpeechStatus(value:unknown):value is SpeechStatus{
+  if(!value||typeof value!=='object')return false;
+  const s=value as SpeechStatus;
+  return (SPEECH_STATES as readonly string[]).includes(s.state)&&typeof s.sessionId==='string'&&typeof s.tabId==='number'&&Number.isFinite(s.tabId)&&typeof s.message==='string'&&typeof s.seconds==='number'&&Number.isFinite(s.seconds)&&s.seconds>=0&&typeof s.sentBytes==='number'&&Number.isFinite(s.sentBytes)&&s.sentBytes>=0&&typeof s.hasAudio==='boolean'&&typeof s.completed==='number'&&Number.isFinite(s.completed)&&s.completed>=0&&typeof s.lastSource==='string'&&typeof s.lastTranslation==='string';
+}
+export function speechStatusOrIdle(value:unknown):SpeechStatus{return isSpeechStatus(value)?{...value}:{...IDLE_SPEECH};}
 export function speechEndpoint(value:string){
   const u=new URL(value);const local=u.protocol==='ws:'&&['127.0.0.1','localhost','[::1]'].includes(u.hostname);
   const allowed=['dashscope.aliyuncs.com','dashscope-intl.aliyuncs.com'].includes(u.hostname)||/^[a-zA-Z0-9-]+\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/.test(u.hostname);

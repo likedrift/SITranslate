@@ -1,4 +1,4 @@
-import {DEFAULT_SPEECH,IDLE_SPEECH,normalizeSpeech,speechAuthRule,type SpeechStatus,type SpeechSettings} from './core/speech';
+import {DEFAULT_SPEECH,IDLE_SPEECH,isSpeechStatus,normalizeSpeech,speechAuthRule,speechStatusOrIdle,type SpeechStatus,type SpeechSettings} from './core/speech';
 import {liveInterruptHint} from './core/live-hints';
 import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver} from './core/types';
 import {Utterances,enqueuePiece,type SpeechPiece} from './core/utterances';
@@ -11,7 +11,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   let inflight:{id:string;version:string;traceId:string}|undefined;
   function enqueue(pieces:SpeechPiece[]){for(let piece of pieces){if(translatedPieces.get(piece.id)===piece.text)continue;const meta=sourceMeta.get(piece.id.slice(0,piece.id.lastIndexOf(':'))),traceId=crypto.randomUUID();piece={...piece,traceId,sourceEndAt:meta?.sourceEndAt};diagnostics.add({id:traceId,createdAt:piece.at,sourceChars:piece.text.length,...(meta?{commitMs:Math.max(0,piece.at-meta.receivedAt)}:{}),...(meta?.sourceEndAt!==undefined?{asrMs:Math.max(0,meta.receivedAt-meta.sourceEndAt)}:{})});const prior=queue;latest.delete(piece.id);latest.set(piece.id,piece.text);queue=enqueuePiece([...queue],{...piece,context:(context+' '+(piece.context??'')).trim().slice(-600)});for(const old of prior)if(old.traceId&&!queue.some(p=>p.traceId===old.traceId))diagnostics.update(old.traceId,{outcome:old.id===piece.id?'stale':'skipped'});while(latest.size>128){const key=latest.keys().next().value!;latest.delete(key);translatedPieces.delete(key);}}void pump();}
   let lock=Promise.resolve<unknown>(undefined),testing=false;
-  const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(data.speechState)state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
+  const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(isSpeechStatus(data.speechState))state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
     const contexts=await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]});
     if(!contexts.length&&['active','connecting'].includes(state.state)){state={...state,state:'stopped',message:'上次音频会话已中断，请重新开启。'};await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});}
     if(contexts.length&&['active','connecting'].includes(state.state)){for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';await caption({resetProvisional:true});}
@@ -101,7 +101,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     if(m.type==='speech:diagnostics-clear'){diagnostics.clear();counters={asrEvents:0,asrIntermediate:0,asrStableIntermediate:0};await persist();return true;}
     if(m.type==='speech:settings-get')return (await chrome.storage.local.get('speechSettings')).speechSettings??DEFAULT_SPEECH;
     if(m.type==='speech:settings-save'){const next=normalizeSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:next});return true;}
-    if(m.type==='speech:status')return {...state};
+    if(m.type==='speech:status')return speechStatusOrIdle(state);
     if(m.type==='speech:start')return serial(()=>start());
     if(m.type==='speech:test')return serial(()=>start(true));
     if(m.type==='speech:stop')return serial(()=>stop());
