@@ -7,6 +7,7 @@ import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
 import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
 import {streamSegment} from './core/stream-text';
+import {isLiveSubtitle} from './core/live-translate';
 
 const scheduler=new Scheduler(2),cache=new TranslationCache();
 const sharedRequests=new SharedWork<TranslationResult>();
@@ -122,7 +123,7 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       // The scheduler serializes this short update separately from long network calls.
       await updateUsage(result.usage);
       return result;
-    }));
+    },isLiveSubtitle(input)?'live':'shared'));
     await recordJob(key,'completed');
     const ids=networkInput.blocks.flatMap(b=>b.segments.map(s=>s.id));
     const output=new Map([...(lookup?.segments??[]),...shared.value.segments.map((s,i)=>({id:ids[i],text:s.text}))].map(s=>[s.id,s.text]));
