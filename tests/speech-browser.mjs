@@ -162,9 +162,10 @@ try{
       await until(()=>mock.stats.lastReadyAt>readyMark&&mock.stats.frames>frames);
       await new Promise(r=>setTimeout(r,1200));
       assert.equal(mock.stats.prematureFrames,premature);
-      assert.ok(mock.stats.openingFrames>=16,`expected buffered frames after ready, got ${mock.stats.openingFrames}`);
-      assert.ok(mock.stats.openingFrames<=40,`opening burst exceeded about 2s, got ${mock.stats.openingFrames}`);
-      assert.ok(mock.stats.openingBytes>=16*3200&&mock.stats.openingBytes<=40*3200,`opening PCM bytes ${mock.stats.openingBytes}`);
+      // 100 ms frames. The cap is 20; the next ~1s of live audio is still inside this opening window.
+      console.log(`opening buffer: ${mock.stats.openingFrames} frames, ${mock.stats.openingBytes} bytes`);
+      assert.ok(mock.stats.openingFrames>=20&&mock.stats.openingFrames<=36,`opening burst ${mock.stats.openingFrames} frames is outside about 2s plus the observation window`);
+      assert.ok(mock.stats.openingBytes>=20*3200&&mock.stats.openingBytes<=36*3200,`opening PCM bytes ${mock.stats.openingBytes}`);
       await rpc('speech:stop');
       const stoppedFrames=mock.stats.frames,stoppedPremature=mock.stats.prematureFrames;
       mock.setReadyDelay(8000);await rpc('speech:start');await new Promise(r=>setTimeout(r,700));await rpc('speech:stop');await new Promise(r=>setTimeout(r,400));
