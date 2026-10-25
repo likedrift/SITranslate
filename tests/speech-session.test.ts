@@ -1,5 +1,6 @@
 import {describe,test} from 'node:test';import assert from 'node:assert/strict';
 import {createSpeechController} from '../src/speech-background.ts';
+import {LIVE_CONTEXT_CHARS} from '../src/core/live-translate.ts';
 import {DEFAULT_SPEECH,IDLE_SPEECH} from '../src/core/speech.ts';
 import {LiveReader} from '../src/core/live-reader.ts';
 import type {TranslationInput,TranslationObserver,TranslationResult} from '../src/core/types.ts';
@@ -149,6 +150,43 @@ describe('live translation session',{concurrency:1},()=>{
       const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
       assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,800);
     }finally{clock.restore();}
+  });
+  test('live requests keep at most 300 characters of prior transcript',async()=>{
+    const captions:Record<string,unknown>[]=[],session=activeSession();
+    const local={speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};
+    installChrome(session,local,captions);
+    const jobs:Promise<TranslationResult>[]=[];
+    const seen:{text:string;context:string;taskId:string}[]=[];
+    const translate=(input:TranslationInput)=>{
+      const block=input.blocks[0];
+      seen.push({text:block.segments[0].text,context:block.context,taskId:input.taskId});
+      const job=(async()=>({segments:[{id:'live',text:'译'}],cached:false,usage:{input:1,output:1,estimatedCost:0}}))();
+      jobs.push(job);return job;
+    };
+    const settled=async()=>{await Promise.all(jobs.splice(0));for(let i=0;i<20;i++)await Promise.resolve();};
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
+    const line=(i:number)=>`第${String(i).padStart(2,'0')}番確認発話です。`;
+    for(let i=0;i<40;i++){
+      await speech.route({type:'speech:transcript',sessionId:'sess',itemId:`ctx-${i}`,text:line(i),preview:'',final:true,receivedAt:Date.now()},offscreen);
+      await settled();
+    }
+    assert.equal(seen.length,40);
+    assert.equal(seen[0].context,'');
+    assert.equal(line(0).length,11);
+    for(const row of seen){assert.ok(row.context.length<=LIVE_CONTEXT_CHARS,String(row.context.length));assert.equal(row.taskId,'subtitle-live-sess');}
+    const last=seen.at(-1)!;
+    assert.equal(last.text,line(39));
+    assert.ok(last.context.length<=LIVE_CONTEXT_CHARS&&last.context.length>=LIVE_CONTEXT_CHARS-1);
+    assert.equal(last.context.endsWith(line(38)),true);
+    assert.equal(last.context.includes(line(0)),false);
+    const chunk='続'.repeat(35)+'。';
+    await speech.route({type:'speech:transcript',sessionId:'sess',itemId:'split',text:chunk.repeat(3),preview:'',final:true,receivedAt:Date.now()},offscreen);
+    await settled();
+    const split=seen.slice(40);
+    assert.ok(split.length>=2);
+    for(const row of split)assert.ok(row.context.length<=LIVE_CONTEXT_CHARS);
+    assert.equal(split[1].context.includes('続'),true);
+    assert.equal(split[1].context.endsWith(chunk),true);
   });
 });
 function installClock(start:number){

@@ -1,3 +1,4 @@
+import {LIVE_CONTEXT_CHARS} from './live-translate';
 export interface SpeechPiece {id:string;order:number;text:string;final:boolean;at:number;context?:string;traceId?:string;sourceEndAt?:number}
 interface Item {text:string;final:boolean;lastAt:number;emitted:Map<number,string>;base:number}
 interface Chunk {text:string;complete:boolean}
@@ -55,7 +56,7 @@ export class Utterances {
       // Do not rewrite historical chunks when a final ASR revision changes earlier words.
       if(i<Math.max(-1,...item.emitted.keys()))continue;
       if(!item.final&&!c.complete&&(c.text.length<UTTERANCE_TAIL_CHARS||now-item.lastAt<UTTERANCE_TAIL_HOLD_MS))continue;
-      result.push({id:`${id}:${i}`,order:item.base+i,text:c.text,final:item.final||c.complete,at:now,context:chunks.slice(0,i).map(c=>c.text).join('').slice(-400)});item.emitted.set(i,c.text);
+      result.push({id:`${id}:${i}`,order:item.base+i,text:c.text,final:item.final||c.complete,at:now,context:chunks.slice(0,i).map(c=>c.text).join('').slice(-LIVE_CONTEXT_CHARS)});item.emitted.set(i,c.text);
     }
     if(result.length)item.lastAt=now;
     while(this.items.size>32)this.items.delete(this.items.keys().next().value!);

@@ -1,6 +1,7 @@
 import { LANGUAGES, type Profile, type TranslationInput, type TranslationResult } from './types';
 import { endpointFor, parseSegments } from './validation';
 import {estimateOutputTokens} from './text';
+import {isLiveSubtitle, liveJsonInstruction, liveMaxTokens} from './live-translate';
 export class ProviderError extends Error {
   constructor(message: string, readonly retryable = false) {super(message);}
 }
@@ -11,6 +12,9 @@ Preserve text already in the target language, numbers, URLs, proper nouns and te
 Each block's context is only background for translating its segments. Never translate context as an extra segment.
 Segments within a block belong to the same paragraph: use the full context for natural grammar, but preserve segment boundaries and IDs so links and formatting still work.
 Return ONLY a JSON object: {"segments":[{"id":"original-id","text":"translation"}]}. Return exactly one entry for every supplied segment, with no new or duplicate IDs. All text must be plain text, never HTML.`;
+export function systemPrompt(input: Pick<TranslationInput, 'kind' | 'taskId' | 'target'>, language: string) {
+  return `${isLiveSubtitle(input) ? liveJsonInstruction : jsonInstruction}\nTarget language: ${language} (${input.target}).`;
+}
 
 export async function readSSE(response: Response, signal: AbortSignal, onText?: (text: string) => void): Promise<{content:string;usage:Record<string,number>;finishReason?:string}> {
   if(!response.body) throw new ProviderError('接口返回了空响应。');
@@ -61,8 +65,8 @@ export class CompatibleAdapter implements ProviderAdapter {
   private async once(profile:Profile,input:TranslationInput,signal:AbortSignal,onText:((text:string)=>void)|undefined,onUsage:(usage:TranslationResult['usage'])=>void):Promise<TranslationResult> {
     const language=LANGUAGES.find(([id])=>id===input.target)?.[1] ?? input.target;
     const estimated=input.blocks.reduce((n,b)=>n+b.segments.reduce((sum,s)=>sum+estimateOutputTokens(s.text),0),0);
-    const body: Record<string,unknown>={model:profile.model,stream:profile.stream,max_tokens:Math.min(8192,Math.max(1024,estimated*2+512)),
-      messages:[{role:'system',content:jsonInstruction+`\nTarget language: ${language} (${input.target}).`},
+    const body: Record<string,unknown>={model:profile.model,stream:profile.stream,max_tokens:isLiveSubtitle(input)?liveMaxTokens(estimated):Math.min(8192,Math.max(1024,estimated*2+512)),
+      messages:[{role:'system',content:systemPrompt(input,language)},
       {role:'user',content:JSON.stringify({blocks:input.blocks})}]};
     if(profile.jsonMode)body.response_format={type:'json_object'};
     if(profile.type==='deepseek' && profile.disableThinking)body.thinking={type:'disabled'};

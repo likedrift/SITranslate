@@ -3,6 +3,7 @@ import {liveInterruptHint} from './core/live-hints';
 import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver} from './core/types';
 import {Utterances,enqueuePiece,LIVE_QUEUE_LIMIT,type SpeechPiece} from './core/utterances';
 import {SpeechDiagnostics,diagnosticSettings} from './core/speech-diagnostics';
+import {liveContext} from './core/live-translate';
 const SKIP_AFTER_MS=12000,EXPIRE_AFTER_MS=15000,TRANSLATION_TIMEOUT_MS=12000;
 export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number,observer?:TranslationObserver)=>Promise<TranslationResult>;cancel:(taskId:string)=>void}){
   let state:SpeechStatus={...IDLE_SPEECH},config:PublicConfig,queue:SpeechPiece[]=[],busy=false,epoch=0,context='',shownOrder=-1;
@@ -22,7 +23,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       enqueue(utterances.flush());scheduleTailFlush();
     },Math.max(0,due-now));
   }
-  function enqueue(pieces:SpeechPiece[]){for(let piece of pieces){if(translatedPieces.get(piece.id)===piece.text)continue;const meta=sourceMeta.get(piece.id.slice(0,piece.id.lastIndexOf(':'))),traceId=crypto.randomUUID();piece={...piece,traceId,sourceEndAt:meta?.sourceEndAt};diagnostics.add({id:traceId,createdAt:piece.at,sourceChars:piece.text.length,...(meta?{commitMs:Math.max(0,piece.at-meta.receivedAt)}:{}),...(meta?.sourceEndAt!==undefined?{asrMs:Math.max(0,meta.receivedAt-meta.sourceEndAt)}:{})});const prior=queue;latest.delete(piece.id);latest.set(piece.id,piece.text);queue=enqueuePiece([...queue],{...piece,context:(context+' '+(piece.context??'')).trim().slice(-600)});for(const old of prior)if(old.traceId&&!queue.some(p=>p.traceId===old.traceId))diagnostics.update(old.traceId,{outcome:old.id===piece.id?'stale':'skipped'});while(latest.size>128){const key=latest.keys().next().value!;latest.delete(key);translatedPieces.delete(key);}}void pump();}
+  function enqueue(pieces:SpeechPiece[]){for(let piece of pieces){if(translatedPieces.get(piece.id)===piece.text)continue;const meta=sourceMeta.get(piece.id.slice(0,piece.id.lastIndexOf(':'))),traceId=crypto.randomUUID();piece={...piece,traceId,sourceEndAt:meta?.sourceEndAt};diagnostics.add({id:traceId,createdAt:piece.at,sourceChars:piece.text.length,...(meta?{commitMs:Math.max(0,piece.at-meta.receivedAt)}:{}),...(meta?.sourceEndAt!==undefined?{asrMs:Math.max(0,meta.receivedAt-meta.sourceEndAt)}:{})});const prior=queue;latest.delete(piece.id);latest.set(piece.id,piece.text);queue=enqueuePiece([...queue],{...piece,context:liveContext(context,piece.context??'')});for(const old of prior)if(old.traceId&&!queue.some(p=>p.traceId===old.traceId))diagnostics.update(old.traceId,{outcome:old.id===piece.id?'stale':'skipped'});while(latest.size>128){const key=latest.keys().next().value!;latest.delete(key);translatedPieces.delete(key);}}void pump();}
   let lock=Promise.resolve<unknown>(undefined),testing=false;
   const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(isSpeechStatus(data.speechState))state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
     const contexts=await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]});
@@ -109,7 +110,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       const itemId=String(m.itemId??'unknown').slice(0,100),receivedAt=Number.isFinite(m.receivedAt)&&Math.abs(Date.now()-m.receivedAt)<10000?m.receivedAt:Date.now(),previous=sourceMeta.get(itemId);counters.asrEvents++;if(!m.final){counters.asrIntermediate++;if(text)counters.asrStableIntermediate++;}
       const incomingEnd=Number.isFinite(m.sourceEndAt)&&m.sourceEndAt<=receivedAt&&m.sourceEndAt>receivedAt-60000?m.sourceEndAt:undefined,carriedEnd=previous?.sourceEndAt!==undefined&&previous.sourceEndAt<=receivedAt&&previous.sourceEndAt>receivedAt-60000?previous.sourceEndAt:undefined,sourceEndAt=incomingEnd??carriedEnd;
       sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(sourceEndAt!==undefined?{sourceEndAt}:{})});while(sourceMeta.size>32)sourceMeta.delete(sourceMeta.keys().next().value!);enqueue(utterances.update(itemId,text,!!m.final));
-      if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=(context+' '+text).slice(-600);}
+      if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=liveContext(context,text);}
       scheduleTailFlush();
       if(m.final)await persist();return;
     }
