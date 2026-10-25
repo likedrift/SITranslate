@@ -9,7 +9,19 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   const utterances=new Utterances(),latest=new Map<string,string>(),translatedPieces=new Map<string,string>(),finalItems=new Set<string>();
   const diagnostics=new SpeechDiagnostics(),sourceMeta=new Map<string,{firstAt:number;receivedAt:number;sourceEndAt?:number}>();
   let counters={asrEvents:0,asrIntermediate:0,asrStableIntermediate:0};
-  let inflight:{id:string;version:string;traceId:string}|undefined;
+  let inflight:{id:string;version:string;traceId:string}|undefined,tailTimer:ReturnType<typeof setTimeout>|undefined;
+  function clearTailTimer(){if(tailTimer!==undefined){clearTimeout(tailTimer);tailTimer=undefined;}}
+  function scheduleTailFlush(now=Date.now()){
+    clearTailTimer();
+    if(!['connecting','active'].includes(state.state))return;
+    const due=utterances.nextTailFlushAt();if(due===undefined)return;
+    const run=epoch,sessionId=state.sessionId;
+    tailTimer=setTimeout(()=>{
+      tailTimer=undefined;
+      if(run!==epoch||sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;
+      enqueue(utterances.flush());scheduleTailFlush();
+    },Math.max(0,due-now));
+  }
   function enqueue(pieces:SpeechPiece[]){for(let piece of pieces){if(translatedPieces.get(piece.id)===piece.text)continue;const meta=sourceMeta.get(piece.id.slice(0,piece.id.lastIndexOf(':'))),traceId=crypto.randomUUID();piece={...piece,traceId,sourceEndAt:meta?.sourceEndAt};diagnostics.add({id:traceId,createdAt:piece.at,sourceChars:piece.text.length,...(meta?{commitMs:Math.max(0,piece.at-meta.receivedAt)}:{}),...(meta?.sourceEndAt!==undefined?{asrMs:Math.max(0,meta.receivedAt-meta.sourceEndAt)}:{})});const prior=queue;latest.delete(piece.id);latest.set(piece.id,piece.text);queue=enqueuePiece([...queue],{...piece,context:(context+' '+(piece.context??'')).trim().slice(-600)});for(const old of prior)if(old.traceId&&!queue.some(p=>p.traceId===old.traceId))diagnostics.update(old.traceId,{outcome:old.id===piece.id?'stale':'skipped'});while(latest.size>128){const key=latest.keys().next().value!;latest.delete(key);translatedPieces.delete(key);}}void pump();}
   let lock=Promise.resolve<unknown>(undefined),testing=false;
   const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(isSpeechStatus(data.speechState))state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
@@ -23,7 +35,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   const command=(extra:Record<string,unknown>)=>chrome.runtime.sendMessage({target:'speech-offscreen',...extra});
   const caption=(data:Record<string,unknown>)=>state.tabId<0?Promise.resolve():chrome.tabs.sendMessage(state.tabId,{type:'video:live-caption',sessionId:state.sessionId,...data},{frameId:0}).catch(()=>{});
   async function stop(message='实时语音翻译已停止。',error=false,hint=''){
-    epoch++;inflight=undefined;for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';queue=[];busy=false;utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();deps.cancel(`subtitle-live-${state.sessionId}`);
+    epoch++;clearTailTimer();inflight=undefined;for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';queue=[];busy=false;utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();deps.cancel(`subtitle-live-${state.sessionId}`);
     try{if((await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]})).length){await command({action:'stop'});await chrome.offscreen.closeDocument();}}catch{ /* Closing a tab may have already released capture. */ }
     await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});
     await caption(hint?{stop:true,hint:hint.slice(0,200)}:{stop:true});state={...state,state:error?'error':'stopped',message};await chrome.action.setBadgeText({tabId:state.tabId>=0?state.tabId:undefined,text:''}).catch(()=>{});await persist();return state;
@@ -88,8 +100,8 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;
       if(m.type==='speech:failed')return serial(()=>m.sessionId===state.sessionId?stop(String(m.message??'音频连接失败。').slice(0,300),true):Promise.resolve(state));
       if(m.type==='speech:ready'){if(testing)return serial(()=>m.sessionId===state.sessionId?stop('语音连接成功，可以开始直播翻译。'):Promise.resolve(state));state.state='active';state.message='已连接，等待标签页声音。';await persist();return;}
-      if(m.type==='speech:warning'){if(m.reconnecting){if(inflight){diagnostics.update(inflight.traceId,{outcome:'cancelled'});void caption({failed:true,pieceId:inflight.id,version:inflight.version});}for(const p of queue)if(p.traceId)diagnostics.update(p.traceId,{outcome:'cancelled'});inflight=undefined;epoch++;busy=false;deps.cancel(`subtitle-live-${state.sessionId}`);state.state='connecting';utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();queue=[];shownOrder=-1;}state.message=String(m.message).slice(0,300);await persist();return;}
-      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(m.asrUsage&&['inputTokens','outputTokens','totalTokens'].every(k=>Number.isSafeInteger(m.asrUsage[k])&&m.asrUsage[k]>=0&&m.asrUsage[k]<=2e12))state.asrUsage={inputTokens:m.asrUsage.inputTokens,outputTokens:m.asrUsage.outputTokens,totalTokens:m.asrUsage.totalTokens};if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';enqueue(utterances.flush());await persist();return;}
+      if(m.type==='speech:warning'){if(m.reconnecting){if(inflight){diagnostics.update(inflight.traceId,{outcome:'cancelled'});void caption({failed:true,pieceId:inflight.id,version:inflight.version});}for(const p of queue)if(p.traceId)diagnostics.update(p.traceId,{outcome:'cancelled'});inflight=undefined;epoch++;clearTailTimer();busy=false;deps.cancel(`subtitle-live-${state.sessionId}`);state.state='connecting';utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();queue=[];shownOrder=-1;}state.message=String(m.message).slice(0,300);await persist();return;}
+      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(m.asrUsage&&['inputTokens','outputTokens','totalTokens'].every(k=>Number.isSafeInteger(m.asrUsage[k])&&m.asrUsage[k]>=0&&m.asrUsage[k]<=2e12))state.asrUsage={inputTokens:m.asrUsage.inputTokens,outputTokens:m.asrUsage.outputTokens,totalTokens:m.asrUsage.totalTokens};if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';enqueue(utterances.flush());scheduleTailFlush();await persist();return;}
       const text=typeof m.text==='string'?m.text.trim().slice(-1500):'',preview=typeof m.preview==='string'?m.preview.slice(0,500):'';
       const transcriptEpoch=epoch;state.lastSource=(text+preview).slice(0,2000);await caption({source:state.lastSource,preview:true});
       if(transcriptEpoch!==epoch||m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;
@@ -98,6 +110,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       const incomingEnd=Number.isFinite(m.sourceEndAt)&&m.sourceEndAt<=receivedAt&&m.sourceEndAt>receivedAt-60000?m.sourceEndAt:undefined,carriedEnd=previous?.sourceEndAt!==undefined&&previous.sourceEndAt<=receivedAt&&previous.sourceEndAt>receivedAt-60000?previous.sourceEndAt:undefined,sourceEndAt=incomingEnd??carriedEnd;
       sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(sourceEndAt!==undefined?{sourceEndAt}:{})});while(sourceMeta.size>32)sourceMeta.delete(sourceMeta.keys().next().value!);enqueue(utterances.update(itemId,text,!!m.final));
       if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=(context+' '+text).slice(-600);}
+      scheduleTailFlush();
       if(m.final)await persist();return;
     }
     if(m.type==='speech:stop'&&!ui){if(sender.tab?.id!==state.tabId||m.sessionId!==state.sessionId)throw new Error('无权停止其他标签页音频。');const hint=liveInterruptHint(m.cause);return serial(()=>m.sessionId===state.sessionId?stop(hint,false,hint):Promise.resolve(state));}

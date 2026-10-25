@@ -82,4 +82,96 @@ describe('live translation session',{concurrency:1},()=>{
     const raw=JSON.stringify(report);
     for(const secret of ['secret-speech-key','secret-text-key','山田太郎','dashscope','https://','短句','再来一句','sourceEndAt'])assert.ok(!raw.includes(secret),secret);
   });
+  test('A long enough unfinished tail flushes at 800 ms without waiting for the next speech:health',async()=>{
+    const captions:Record<string,unknown>[]=[],session=activeSession();
+    const local={speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};
+    installChrome(session,local,captions);
+    const clock=installClock(1_700_000_000_000);
+    const jobs:Promise<TranslationResult>[]=[];
+    const translate=(input:TranslationInput)=>{
+      const job=(async()=>({segments:[{id:'live',text:'译：'+input.blocks[0].segments[0].text}],cached:false,usage:{input:1,output:1,estimatedCost:0}}))();
+      jobs.push(job);return job;
+    };
+    const settled=async()=>{await Promise.all(jobs.splice(0));for(let i=0;i<20;i++)await Promise.resolve();};
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
+      const tail='あいうえおかきくけこさし';
+      const send=(text:string,itemId:string,at=clock.now())=>speech.route({type:'speech:transcript',sessionId:'sess',itemId,text,preview:'',final:false,receivedAt:at},offscreen);
+      await send('今日は晴れです。','punct');
+      assert.equal(jobs.length,1);
+      await settled();
+      const started=clock.now();
+      await send(tail,'tail',started);
+      assert.equal(jobs.length,0);
+      clock.advance(799);
+      assert.equal(jobs.length,0);
+      clock.advance(1);
+      assert.equal(jobs.length,1);
+      await settled();
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
+      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,800);
+      const again=clock.now();
+      await send(tail+'す','slide',again);
+      clock.advance(400);
+      await send(tail+'すせ','slide',clock.now());
+      clock.advance(399);
+      assert.equal(jobs.length,0);
+      clock.advance(1);
+      assert.equal(jobs.length,1);
+      await settled();
+      const slid=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
+      assert.equal(slid.rows.find(row=>row.sourceChars===(tail+'すせ').length)?.commitMs,400);
+      await send('あいうえお','short');
+      clock.advance(5000);
+      await speech.route({type:'speech:health',sessionId:'sess',seconds:9,sentBytes:9000,hasAudio:true},offscreen);
+      assert.equal(jobs.length,0);
+    }finally{clock.restore();}
+  });
+  test('speech:health still flushes a due tail when the scheduled check has not run',async()=>{
+    const captions:Record<string,unknown>[]=[],session=activeSession();
+    const local={speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};
+    installChrome(session,local,captions);
+    const clock=installClock(1_700_000_000_000);
+    const jobs:Promise<TranslationResult>[]=[];
+    const translate=(input:TranslationInput)=>{
+      const job=(async()=>({segments:[{id:'live',text:'译：'+input.blocks[0].segments[0].text}],cached:false,usage:{input:1,output:1,estimatedCost:0}}))();
+      jobs.push(job);return job;
+    };
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
+      const tail='あいうえおかきくけこさし',started=clock.now();
+      await speech.route({type:'speech:transcript',sessionId:'sess',itemId:'held',text:tail,preview:'',final:false,receivedAt:started},offscreen);
+      clock.advance(800,false);
+      assert.equal(jobs.length,0);
+      await speech.route({type:'speech:health',sessionId:'sess',seconds:4,sentBytes:4000,hasAudio:true},offscreen);
+      assert.equal(jobs.length,1);
+      await Promise.all(jobs.splice(0));
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
+      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,800);
+    }finally{clock.restore();}
+  });
 });
+function installClock(start:number){
+  const realNow=Date.now,realSetTimeout=globalThis.setTimeout,realClearTimeout=globalThis.clearTimeout;
+  let now=start,seq=1;
+  const pending=new Map<number,{at:number;fn:()=>void}>();
+  Date.now=()=>now;
+  globalThis.setTimeout=((fn:TimerHandler,ms?:number)=>{
+    const id=seq++;
+    pending.set(id,{at:now+Number(ms??0),fn(){if(typeof fn==='function')fn();}});
+    return id as unknown as ReturnType<typeof setTimeout>;
+  }) as typeof setTimeout;
+  globalThis.clearTimeout=((id?:ReturnType<typeof setTimeout>)=>{pending.delete(Number(id));}) as typeof clearTimeout;
+  return {
+    now:()=>now,
+    advance(ms:number,fire=true){
+      now+=ms;if(!fire)return;
+      for(let guard=0;guard<8;guard++){
+        const due=[...pending.entries()].filter(([,timer])=>timer.at<=now).sort((a,b)=>a[1].at-b[1].at);
+        if(!due.length)return;
+        for(const [id,timer] of due){if(!pending.has(id))continue;pending.delete(id);timer.fn();}
+      }
+    },
+    restore(){Date.now=realNow;globalThis.setTimeout=realSetTimeout;globalThis.clearTimeout=realClearTimeout;}
+  };
+}
