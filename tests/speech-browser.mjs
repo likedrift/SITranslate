@@ -126,6 +126,38 @@ try{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');await page.reload();await until(async()=> (await rpc('speech:status')).state==='stopped');assert.match((await rpc('speech:status')).message,/开始实时翻译/);assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
     await popup.reload();await until(async()=>/开始实时翻译/.test(await popup.locator('#speech-state').textContent()??''));
   });
+  await step('Live edge and buffer seeks keep capture, and a large rewind still stops',async()=>{
+    await page.locator('#silent-audio').click();
+    const inPage=(time,arm)=>worker.evaluate(async({tabId,time,arm})=>{
+      await chrome.scripting.executeScript({target:{tabId},args:[time,arm],func:(time,arm)=>{
+        const video=document.querySelector('video');
+        if(arm){
+          let playhead=time;
+          const duration=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'duration');
+          const current=Object.getOwnPropertyDescriptor(HTMLMediaElement.prototype,'currentTime');
+          if(!duration?.configurable||!current?.configurable)throw new Error('media time properties are not configurable');
+          Object.defineProperty(video,'duration',{configurable:true,get:()=>Infinity});
+          Object.defineProperty(video,'currentTime',{configurable:true,get:()=>playhead,set:value=>{playhead=Number(value);}});
+          if(video.duration!==Infinity||video.currentTime!==time)throw new Error('live media mock was not applied');
+          return;
+        }
+        video.currentTime=time;video.dispatchEvent(new Event('seeking'));
+      }});
+    },{tabId,time,arm});
+    await inPage(500,true);
+    await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active'&&mock.stats.frames>0);
+    const seek=async time=>{
+      const frames=mock.stats.frames;await inPage(time,false);await new Promise(r=>setTimeout(r,600));
+      assert.equal((await rpc('speech:status')).state,'active');
+      assert.ok(mock.stats.frames>frames,'capture frames stopped during a tolerated live seek');
+      assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,1);
+    };
+    await seek(560);await seek(548);await seek(548-15);
+    await inPage(500,false);await until(async()=>(await rpc('speech:status')).state==='stopped');
+    assert.match((await rpc('speech:status')).message,/拖动进度/);
+    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
+    await page.evaluate(()=>{document.querySelector('video')?.remove();const video=document.createElement('video');video.style.cssText='width:720px;height:405px;background:#202438';document.body.prepend(video);});
+  });
   await step('Seeking or switching video stops audio and keeps a restart hint until the user starts again',async()=>{
     await page.locator('#silent-audio').click();await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active'&&(await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));
     await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('seeking')));await until(async()=>(await rpc('speech:status')).state==='stopped');
