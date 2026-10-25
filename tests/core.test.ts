@@ -4,7 +4,8 @@ import {endpointFor,validateSettings,validateInput,parseSegments} from '../src/c
 import {DEFAULT_SETTINGS,EMPTY_STATUS,EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,isPageStatus,isVideoStatus,pageStatusOrIdle,videoStatusOrEmpty,type TranslationInput} from '../src/core/types.ts';
 import {Scheduler} from '../src/core/scheduler.ts';
 import {TranslationCache,cacheKey} from '../src/core/cache.ts';
-import {CompatibleAdapter,readSSE} from '../src/core/provider.ts';
+import {CompatibleAdapter,ProviderError,RateLimitError,readSSE,retryDelayMs} from '../src/core/provider.ts';
+import {isRateLimitPayload,RATE_LIMIT_BACKOFF_MS,rateLimitBackoffMs,RETRYABLE_BACKOFF_MS} from '../src/core/rate-limit.ts';
 import {SharedWork} from '../src/core/shared.ts';
 import {estimateOutputTokens} from '../src/core/text.ts';
 import {cueIndex,activeSubtitle,subtitleText} from '../src/core/subtitles.ts';
@@ -190,6 +191,33 @@ test('provider uses configured endpoint and parameters and never returns reasoni
 test('authentication failure is actionable, non-retryable, and does not expose provider response or key',async()=>{
   const original=globalThis.fetch;globalThis.fetch=(async()=>new Response('secret-provider-diagnostic',{status:401}))as typeof fetch;
   try{await assert.rejects(new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],apiKey:'secret'},input,new AbortController().signal),error=>error instanceof Error&&/API Key/.test(error.message)&&!error.message.includes('secret-provider'));
+  }finally{globalThis.fetch=original;}
+});
+test('429 and equivalent rate-limit bodies back off once, without echoing the provider payload',async()=>{
+  assert.equal(isRateLimitPayload(429,''),true);
+  assert.equal(isRateLimitPayload(401,'rate limit secret'),false);
+  assert.equal(isRateLimitPayload(402,'{"error":{"code":"insufficient_quota"}}'),false);
+  assert.equal(isRateLimitPayload(400,'{"error":{"type":"rate_limit_error","code":"rate_limit_exceeded"}}'),true);
+  assert.equal(isRateLimitPayload(503,'{"code":"Throttling.RateQuota","message":"Requests rate limit exceeded"}'),true);
+  assert.equal(isRateLimitPayload(500,'upstream unavailable'),false);
+  assert.equal(retryDelayMs(new RateLimitError(),0),RATE_LIMIT_BACKOFF_MS);
+  assert.equal(retryDelayMs(new RateLimitError(),1),undefined);
+  assert.equal(retryDelayMs(new ProviderError('模型服务暂不可用（503）。',true),0),RETRYABLE_BACKOFF_MS);
+  assert.equal(retryDelayMs(new ProviderError('API Key 无效，请在设置中更新。'),0),undefined);
+  assert.equal(rateLimitBackoffMs(0),2000);assert.equal(rateLimitBackoffMs(1),4000);assert.equal(rateLimitBackoffMs(4),8000);
+  const original=globalThis.fetch;
+  const profile={...DEFAULT_SETTINGS.profiles[0],apiKey:'secret',stream:false};
+  const hidden=(error:unknown)=>error instanceof RateLimitError&&error.retryable&&error.rateLimited&&error.message==='请求过于频繁，请稍后再试。'&&!/secret|sk-live/.test(error.message);
+  try{
+    globalThis.fetch=(async()=>new Response('{"error":{"message":"secret sk-live rate limit"}}',{status:429}))as typeof fetch;
+    await assert.rejects(new CompatibleAdapter().translate(profile,input,new AbortController().signal),hidden);
+    globalThis.fetch=(async()=>new Response('{"code":"Throttling.RateQuota","message":"secret sk-live"}',{status:503}))as typeof fetch;
+    await assert.rejects(new CompatibleAdapter().translate(profile,input,new AbortController().signal),hidden);
+    globalThis.fetch=(async()=>new Response('bad gateway',{status:502}))as typeof fetch;
+    await assert.rejects(new CompatibleAdapter().translate(profile,input,new AbortController().signal),error=>error instanceof ProviderError&&!(error instanceof RateLimitError)&&error.retryable);
+    const wire='data: {"error":{"message":"secret sk-live","type":"rate_limit_error","code":"rate_limit_exceeded"}}\n\n';
+    await assert.rejects(readSSE(new Response(wire),new AbortController().signal),hidden);
+    await assert.rejects(readSSE(new Response('data: {"error":{"message":"secret model missing"}}\n\n'),new AbortController().signal),error=>error instanceof ProviderError&&!(error instanceof RateLimitError)&&!error.retryable&&!String(error.message).includes('secret'));
   }finally{globalThis.fetch=original;}
 });
 test('subtitle timeline handles seeking, overlapping cues and exclusive end boundaries',()=>{
