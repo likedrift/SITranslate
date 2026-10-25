@@ -188,7 +188,183 @@ describe('live translation session',{concurrency:1},()=>{
     assert.equal(split[1].context.includes('続'),true);
     assert.equal(split[1].context.endsWith(chunk),true);
   });
+  test('queued short fragments share one request, keep every line, and captions stay in order',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+    const line=(i:number)=>`句${i}。`;
+    try{
+      for(let i=0;i<8;i++)await speech.route(transcript(`s${i}`,line(i)),offscreen);
+      assert.deepEqual(seen,[line(0)]);
+      first.resolve();await drain(jobs);
+      const joined=Array.from({length:7},(_,i)=>line(i+1)).join('');
+      assert.deepEqual(seen,[line(0),joined]);
+      assert.ok(joined.indexOf(line(1))<joined.indexOf(line(7)));
+      const spoken=captions.filter(message=>typeof message.source==='string'&&!message.preview);
+      const primerFinal=spoken.findIndex(message=>message.source===line(0)&&!message.partial);
+      const later=spoken.findIndex(message=>String(message.source).includes(line(1)));
+      assert.ok(primerFinal>=0&&later>primerFinal,'后一句不能先于前一句的成稿上屏');
+      assert.deepEqual(spoken.filter(message=>!message.partial).map(message=>message.source),[line(0),joined]);
+      const reader=new LiveReader();let t=0;
+      for(const message of captions){
+        t+=100;
+        if(message.preview||typeof message.translation!=='string')continue;
+        reader.receive({id:String(message.pieceId??''),version:String(message.version??''),source:String(message.source??''),text:String(message.translation),final:!message.partial,arrivedAt:t},t);
+      }
+      assert.deepEqual(reader.items.map(item=>item.source),[line(0),joined]);
+      assert.equal(reader.current?.text,'译：'+line(0));assert.equal(reader.current?.final,true);
+      reader.tick(t+30_000);
+      assert.equal(reader.current?.source,joined);assert.equal(reader.current?.text,'译：'+joined);assert.equal(reader.current?.final,true);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {outcomes:Record<string,number>};
+      assert.equal(report.outcomes.skipped,0);assert.equal(report.outcomes.completed,8);
+    }finally{first.resolve();}
+  });
+  test('overflow still drops the oldest merged group and translates the rest in order',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+    const line=(i:number)=>`${String(i).padStart(2,'0')}${'あ'.repeat(33)}。`;
+    try{
+      assert.equal(Array.from(line(0)).length,36);
+      for(let i=0;i<9;i++)await speech.route(transcript(`b${i}`,line(i)),offscreen);
+      first.resolve();await drain(jobs);
+      const pair=(left:number,right:number)=>line(left)+line(right);
+      assert.deepEqual(seen,[line(0),pair(3,4),pair(5,6),pair(7,8)]);
+      assert.equal(seen.some(text=>text.includes(line(1))||text.includes(line(2))),false);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{outcome?:string}[];outcomes:Record<string,number>};
+      assert.equal(report.outcomes.skipped,2);assert.equal(report.outcomes.completed,7);
+      assert.deepEqual(report.rows.slice(1,3).map(row=>row.outcome),['skipped','skipped']);
+      assert.deepEqual(captions.filter(message=>typeof message.translation==='string'&&!message.partial&&!message.preview).map(message=>message.source),seen);
+    }finally{first.resolve();}
+  });
+  test('a queued revision updates the merged request instead of translating the stale fragment',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+    try{
+      await speech.route(transcript('hold','占位长句保持在途。'),offscreen);
+      await speech.route(transcript('a','甲。'),offscreen);
+      await speech.route(transcript('b','丙丁戊。'),offscreen);
+      await speech.route(transcript('a','甲乙。'),offscreen);
+      first.resolve();await drain(jobs);
+      assert.deepEqual(seen,['占位长句保持在途。','甲乙。丙丁戊。']);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;outcome?:string}[];outcomes:Record<string,number>};
+      assert.equal(report.rows.find(row=>row.sourceChars==='甲。'.length)?.outcome,'stale');
+      assert.equal(report.outcomes.skipped,0);assert.equal(report.outcomes.completed,3);
+    }finally{first.resolve();}
+  });
+  test('a fresh fragment more than 3s later is not skipped with an older neighbor',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000),first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('hold','占位句。'),offscreen);
+      await speech.route(transcript('old','旧。'),offscreen);
+      clock.advance(4000,false);
+      await speech.route(transcript('fresh','新的句子。'),offscreen);
+      clock.advance(9000,false);
+      first.resolve();await drain(jobs);
+      assert.deepEqual(seen,['占位句。','新的句子。']);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;outcome?:string}[];outcomes:Record<string,number>};
+      assert.equal(report.rows.find(row=>row.sourceChars==='旧。'.length)?.outcome,'skipped');
+      assert.equal(report.rows.find(row=>row.sourceChars==='新的句子。'.length)?.outcome,'completed');
+      assert.equal(report.outcomes.skipped,1);assert.equal(report.outcomes.completed,2);
+    }finally{first.resolve();clock.restore();}
+  });
+  test('a merged group waits from its earliest fragment and is skipped together after 12s',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000),first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('hold','占位句。'),offscreen);
+      await speech.route(transcript('a','甲。'),offscreen);
+      await speech.route(transcript('b','乙。'),offscreen);
+      clock.advance(13000,false);
+      first.resolve();await drain(jobs);
+      assert.deepEqual(seen,['占位句。']);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {outcomes:Record<string,number>};
+      assert.equal(report.outcomes.completed,1);assert.equal(report.outcomes.skipped,2);
+    }finally{first.resolve();clock.restore();}
+  });
+  test('a merged translation that returns after 15s withdraws 生成中 for every fragment',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000),first=deferred(),second=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;else await second.promise;});
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('hold','占位句。'),offscreen);
+      await speech.route(transcript('a','甲。'),offscreen);
+      await speech.route(transcript('b','乙。'),offscreen);
+      first.resolve();
+      for(let i=0;i<20&&seen.length<2;i++)await Promise.resolve();
+      assert.equal(seen[1],'甲。乙。');
+      clock.advance(16000,false);second.resolve();await drain(jobs);
+      assert.equal(captions.some(message=>message.translation==='译：甲。乙。'&&!message.partial),false);
+      const reader=new LiveReader();let t=clock.now();
+      for(const message of captions){
+        t+=100;
+        if(message.failed){reader.withdraw(String(message.pieceId??''),String(message.version??''),t);continue;}
+        if(message.preview||typeof message.translation!=='string')continue;
+        reader.receive({id:String(message.pieceId??''),version:String(message.version??''),source:String(message.source??''),text:String(message.translation),final:!message.partial,arrivedAt:t},t);
+      }
+      reader.tick(t+30_000);
+      assert.equal(reader.current?.text,'译：占位句。');assert.equal(reader.current?.final,true);
+      assert.ok(!reader.items.some(item=>!item.final));
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {outcomes:Record<string,number>};
+      assert.equal(report.outcomes.stale,2);assert.equal(report.outcomes.completed,1);
+    }finally{first.resolve();second.resolve();clock.restore();}
+  });
+  test('a 12s translation timeout still fails the in-flight line and skips the merged queue',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const clock=installClock(1_700_000_000_000),first=deferred();
+    const translate=translating(seen,jobs,async index=>{if(index===1)await first.promise;});
+    try{
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+      await speech.route(transcript('hold','占位句。'),offscreen);
+      await speech.route(transcript('a','甲。'),offscreen);
+      await speech.route(transcript('b','乙。'),offscreen);
+      clock.advance(12000);
+      first.resolve();await drain(jobs);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;outcome?:string}[];outcomes:Record<string,number>};
+      assert.equal(report.rows.find(row=>row.sourceChars==='占位句。'.length)?.outcome,'failed');
+      assert.equal(report.outcomes.skipped,2);assert.equal(report.outcomes.completed,0);
+      assert.equal(seen.length,1);
+    }finally{first.resolve();clock.restore();}
+  });
 });
+function speechLocal(){
+  return {speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};
+}
+function transcript(itemId:string,text:string){return {type:'speech:transcript',sessionId:'sess',itemId,text,preview:'',final:true,receivedAt:Date.now()};}
+function deferred(){let resolve:()=>void=()=>{};const promise=new Promise<void>(done=>{resolve=done;});return {promise,resolve};}
+function translating(seen:string[],jobs:Promise<unknown>[],wait:(index:number)=>Promise<void>){
+  let started=0;
+  return (input:TranslationInput,_tab:number,observer?:TranslationObserver)=>{
+    const text=input.blocks[0].segments[0].text;seen.push(text);
+    const index=++started;
+    const job=(async()=>{
+      await wait(index);observer?.start?.(true);observer?.text?.('译：'+text);
+      return {segments:[{id:'live',text:'译：'+text}],cached:false,usage:{input:1,output:1,estimatedCost:0}};
+    })();
+    jobs.push(job);return job;
+  };
+}
+async function drain(jobs:Promise<unknown>[]){
+  let idle=0;
+  for(let guard=0;guard<50&&idle<8;guard++){if(jobs.length){idle=0;await Promise.all(jobs.splice(0));}else idle++;await Promise.resolve();}
+}
 function installClock(start:number){
   const realNow=Date.now,realSetTimeout=globalThis.setTimeout,realClearTimeout=globalThis.clearTimeout;
   let now=start,seq=1;
