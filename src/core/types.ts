@@ -24,6 +24,8 @@ export interface TextBlock { id: string; context: string; segments: Segment[] }
 export interface TranslationInput {
   kind: 'page' | 'selection' | 'subtitle' | 'test'; requestId: string; taskId: string;
   profileId: string; target: string; blocks: TextBlock[];
+  /** Capped copy of `speechSettings.context` for live subtitles. Absent when the user left terms empty. */
+  glossary?: string;
 }
 export interface TranslationResult {
   segments: Segment[]; cached: boolean; usage: { input: number; output: number; estimatedCost: number; requests?:number };

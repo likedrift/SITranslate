@@ -1,7 +1,7 @@
 import { LANGUAGES, type Profile, type TranslationInput, type TranslationResult } from './types';
 import { endpointFor, parseSegments } from './validation';
 import {estimateOutputTokens} from './text';
-import {isLiveSubtitle, liveJsonInstruction, liveMaxTokens} from './live-translate';
+import {isLiveSubtitle, liveGlossary, liveJsonInstruction, liveMaxTokens, LIVE_TERMS_PREFIX} from './live-translate';
 import {isRateLimitPayload, rateLimitBackoffMs, RETRYABLE_BACKOFF_MS} from './rate-limit';
 export class ProviderError extends Error {
   constructor(message: string, readonly retryable = false) {super(message);}
@@ -24,8 +24,10 @@ Preserve text already in the target language, numbers, URLs, proper nouns and te
 Each block's context is only background for translating its segments. Never translate context as an extra segment.
 Segments within a block belong to the same paragraph: use the full context for natural grammar, but preserve segment boundaries and IDs so links and formatting still work.
 Return ONLY a JSON object: {"segments":[{"id":"original-id","text":"translation"}]}. Return exactly one entry for every supplied segment, with no new or duplicate IDs. All text must be plain text, never HTML.`;
-export function systemPrompt(input: Pick<TranslationInput, 'kind' | 'taskId' | 'target'>, language: string) {
-  return `${isLiveSubtitle(input) ? liveJsonInstruction : jsonInstruction}\nTarget language: ${language} (${input.target}).`;
+export function systemPrompt(input: Pick<TranslationInput, 'kind' | 'taskId' | 'target' | 'glossary'>, language: string) {
+  const terms = isLiveSubtitle(input) ? liveGlossary(input.glossary) : '';
+  const clause = terms ? `\n${LIVE_TERMS_PREFIX}${terms}` : '';
+  return `${isLiveSubtitle(input) ? liveJsonInstruction : jsonInstruction}${clause}\nTarget language: ${language} (${input.target}).`;
 }
 
 export async function readSSE(response: Response, signal: AbortSignal, onText?: (text: string) => void): Promise<{content:string;usage:Record<string,number>;finishReason?:string}> {

@@ -2,7 +2,8 @@ import {describe,test} from 'node:test';import assert from 'node:assert/strict';
 import {createSpeechController} from '../src/speech-background.ts';
 import {RateLimitError} from '../src/core/provider.ts';
 import {rateLimitBackoffMs} from '../src/core/rate-limit.ts';
-import {LIVE_CONTEXT_CHARS} from '../src/core/live-translate.ts';
+import {LIVE_CONTEXT_CHARS, liveGlossary} from '../src/core/live-translate.ts';
+import {systemPrompt} from '../src/core/provider.ts';
 import {DEFAULT_SPEECH,IDLE_SPEECH} from '../src/core/speech.ts';
 import {LiveReader} from '../src/core/live-reader.ts';
 import type {TranslationInput,TranslationObserver,TranslationResult} from '../src/core/types.ts';
@@ -76,7 +77,7 @@ describe('live translation session',{concurrency:1},()=>{
     assert.equal(report.rows.find(row=>row.sourceChars==='短句。'.length)?.asrMs,420);
     assert.equal(typeof report.rows.find(row=>row.sourceChars==='再来一句。'.length)?.asrMs,'number');
     assert.equal(report.outcomes.completed,2);
-    assert.equal(report.settings.asrModel,'qwen3-asr-flash-realtime');assert.equal(report.settings.language,'ja');assert.equal(report.settings.textModel,'deepseek-flash');assert.equal(report.settings.textStream,true);assert.equal(report.settings.readingMode,'live');assert.equal(report.settings.target,'zh-Hans');
+    assert.equal(report.settings.asrModel,'qwen3-asr-flash-realtime');assert.equal(report.settings.language,'ja');assert.equal(report.settings.textModel,'deepseek-flash');assert.equal(report.settings.textStream,true);assert.equal(report.settings.readingMode,'live');assert.equal(report.settings.target,'zh-Hans');assert.equal(report.settings.terms,true);
     assert.deepEqual(report.policy,{maxQueue:3,skipAfterMs:12000,expireAfterMs:15000,translationTimeoutMs:12000,silenceDurationMs:600});
     const row=report.rows.find(item=>item.sourceChars==='短句。'.length)!;
     await speech.route({type:'speech:paint',sessionId:'sess',traceId:row.id,at:receivedAt+500,arrivedAt:receivedAt+20,sourceEndAt},page);
@@ -89,8 +90,8 @@ describe('live translation session',{concurrency:1},()=>{
     for(const silenceDurationMs of [400,800] as const){
       installChrome(activeSession(),{...speechLocal(),speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key',silenceDurationMs,context:'不要出现在导出'}},[]);
       const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate:async()=>{throw new Error('unused');},cancel(){}});
-      const report=await speech.route({type:'speech:diagnostics'},ui) as {policy:{silenceDurationMs:number}};
-      assert.equal(report.policy.silenceDurationMs,silenceDurationMs);
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {policy:{silenceDurationMs:number};settings:{terms?:boolean}};
+      assert.equal(report.policy.silenceDurationMs,silenceDurationMs);assert.equal(report.settings.terms,true);
       const raw=JSON.stringify(report);
       assert.ok(!raw.includes('secret-speech-key'));assert.ok(!raw.includes('不要出现在导出'));
     }
@@ -205,6 +206,35 @@ describe('live translation session',{concurrency:1},()=>{
     for(const row of split)assert.ok(row.context.length<=LIVE_CONTEXT_CHARS);
     assert.equal(split[1].context.includes('続'),true);
     assert.equal(split[1].context.endsWith(chunk),true);
+  });
+  test('subtitle-live requests include configured ASR terms and omit them when unset',async()=>{
+    const run=async(context:string)=>{
+      const captions:Record<string,unknown>[]=[],session=activeSession();
+      installChrome(session,{...speechLocal(),speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key',context}},captions);
+      const seen:TranslationInput[]=[];
+      const translate=(input:TranslationInput)=>{seen.push(input);return Promise.resolve({segments:[{id:'live',text:'译'}],cached:false,usage:{input:1,output:1,estimatedCost:0}});};
+      const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
+      await speech.route({type:'speech:transcript',sessionId:'sess',itemId:'term-'+context.length,text:'山田太郎です。',preview:'',final:true,receivedAt:Date.now()},offscreen);
+      for(let i=0;i<20;i++)await Promise.resolve();
+      const report=await speech.route({type:'speech:diagnostics'},ui) as {settings:{terms?:boolean}};
+      return {input:seen[0],report};
+    };
+    const configured=await run('山田太郎、番組名は深夜の対話\n山田太郎');
+    assert.equal(configured.input.taskId,'subtitle-live-sess');
+    assert.equal(configured.input.glossary,liveGlossary('山田太郎、番組名は深夜の対話\n山田太郎'));
+    assert.equal(configured.input.glossary,'山田太郎、番組名は深夜の対話');
+    assert.equal(configured.input.blocks[0].context.includes('山田太郎'),false);
+    assert.match(systemPrompt(configured.input,'简体中文'),/山田太郎、番組名は深夜の対話/);
+    assert.equal(configured.report.settings.terms,true);
+    const raw=JSON.stringify(configured.report);
+    assert.equal(raw.includes('山田太郎'),false);assert.equal(raw.includes('深夜の対話'),false);assert.equal(raw.includes('secret-speech-key'),false);
+    for(const context of ['','   \n、，']){
+      const blank=await run(context);
+      assert.equal(blank.input.glossary,undefined);
+      assert.equal(blank.input.blocks[0].context,'');
+      assert.equal(systemPrompt(blank.input,'简体中文').includes('Speech terms'),false);
+      assert.equal(blank.report.settings.terms,false);
+    }
   });
   test('queued short fragments share one request, keep every line, and captions stay in order',async()=>{
     const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];

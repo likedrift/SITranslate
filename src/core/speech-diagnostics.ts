@@ -1,7 +1,7 @@
 export interface SpeechTrace {id:string;createdAt:number;sourceChars:number;targetChars?:number;streaming?:boolean;asrMs?:number;commitMs?:number;queueMs?:number;schedulerMs?:number;firstTokenMs?:number;firstTextMs?:number;translationMs?:number;displayWaitMs?:number;firstPaintMs?:number;audioToPaintMs?:number;outcome?:'completed'|'failed'|'stale'|'skipped'|'cancelled';cache?:boolean}
-export interface DiagnosticSettings {asrModel?:string;language?:'ja'|'en'|'zh'|'auto';textModel?:string;textStream?:boolean;readingMode?:'balanced'|'live';target?:string}
+export interface DiagnosticSettings {asrModel?:string;language?:'ja'|'en'|'zh'|'auto';textModel?:string;textStream?:boolean;readingMode?:'balanced'|'live';target?:string;terms?:boolean}
 const modelName=(value:unknown)=>{if(typeof value!=='string')return;const name=value.trim();if(!name||name.length>120||/[\s:@?#]/.test(name)||name.includes('//'))return;return name;};
-export function diagnosticSettings(input:{asrModel?:unknown;language?:unknown;textModel?:unknown;textStream?:unknown;readingMode?:unknown;target?:unknown}):DiagnosticSettings{
+export function diagnosticSettings(input:{asrModel?:unknown;language?:unknown;textModel?:unknown;textStream?:unknown;readingMode?:unknown;target?:unknown;terms?:unknown}):DiagnosticSettings{
   const settings:DiagnosticSettings={};
   const asrModel=modelName(input.asrModel);if(asrModel)settings.asrModel=asrModel;
   if(input.language==='ja'||input.language==='en'||input.language==='zh'||input.language==='auto')settings.language=input.language;
@@ -9,6 +9,7 @@ export function diagnosticSettings(input:{asrModel?:unknown;language?:unknown;te
   if(typeof input.textStream==='boolean')settings.textStream=input.textStream;
   if(input.readingMode==='balanced'||input.readingMode==='live')settings.readingMode=input.readingMode;
   if(typeof input.target==='string'&&/^[a-z]{2,3}(?:-[A-Za-z]{2,8})?$/.test(input.target))settings.target=input.target;
+  if(typeof input.terms==='boolean')settings.terms=input.terms;
   return settings;
 }
 export const DIAGNOSTIC_ROW_LIMIT=100;
