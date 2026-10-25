@@ -66,3 +66,9 @@ test('Legacy speech_stopped audio_end_ms is kept for that item and can map to an
   if(done.kind==='transcript')assert.equal(clock.endAt(done.audioEndMs??-1),1150);
   assert.deepEqual(speechProtocol(DEFAULT_SPEECH).parse({type:'conversation.item.input_audio_transcription.completed',item_id:'one',transcript:'無関係'}),[{kind:'transcript',itemId:'one',text:'無関係',preview:'',final:true}]);
 });
+test('Legacy speech_stopped item timestamps stay capped at 32',()=>{
+  const p=speechProtocol(DEFAULT_SPEECH);
+  for(let i=0;i<40;i++)assert.deepEqual(p.parse({type:'input_audio_buffer.speech_stopped',audio_end_ms:1000+i,item_id:`item-${i}`}),[]);
+  const read=(id:string)=>{const event=p.parse({type:'conversation.item.input_audio_transcription.completed',item_id:id,transcript:'句。'})[0];assert.equal(event.kind,'transcript');return event.kind==='transcript'?event.audioEndMs:undefined;};
+  assert.equal(read('item-0'),undefined);assert.equal(read('item-7'),undefined);assert.equal(read('item-8'),1008);assert.equal(read('item-39'),1039);
+});

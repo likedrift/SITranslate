@@ -6,9 +6,12 @@ interface Chunk {text:string;complete:boolean}
 export const UTTERANCE_CHUNK_CHARS=36;
 export const UTTERANCE_TAIL_CHARS=12;
 export const UTTERANCE_TAIL_HOLD_MS=800;
+export const UTTERANCE_ITEM_LIMIT=32;
 export class Utterances {
   private items=new Map<string,Item>();private order=0;
   reset(){this.items.clear();this.order=0;}
+  get size(){return this.items.size;}
+  get emittedCount(){let n=0;for(const item of this.items.values())n+=item.emitted.size;return n;}
   update(id:string,text:string,final:boolean,now=Date.now()):SpeechPiece[]{
     id=id||'unknown';text=text.trim();let item=this.items.get(id);
     if(!item){item={text:'',final:false,lastAt:now,emitted:new Map(),base:this.order++*10000};this.items.set(id,item);}
@@ -59,7 +62,7 @@ export class Utterances {
       result.push({id:`${id}:${i}`,order:item.base+i,text:c.text,final:item.final||c.complete,at:now,context:chunks.slice(0,i).map(c=>c.text).join('').slice(-LIVE_CONTEXT_CHARS)});item.emitted.set(i,c.text);
     }
     if(result.length)item.lastAt=now;
-    while(this.items.size>32)this.items.delete(this.items.keys().next().value!);
+    while(this.items.size>UTTERANCE_ITEM_LIMIT)this.items.delete(this.items.keys().next().value!);
     return result;
   }
 }
