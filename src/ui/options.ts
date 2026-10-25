@@ -3,7 +3,7 @@ import type {CaptionLayout} from '../core/caption-layout';
 import {endpointFor,validateSettings} from '../core/validation';
 import {rpc,el,value,check,languageOptions,sitePattern} from './client';
 import {normalizeSpeech,isStreaming,type SpeechSettings,type SpeechStatus} from '../core/speech';
-let settings:Settings,editing='',origins:string[]=[],dirty=false,ready=false;
+let settings:Settings,editing='',origins:string[]=[],dirty=false,ready=false,speechReady=false;
 el('app-version').textContent=`VERSION ${chrome.runtime.getManifest().version}`;
 function feedback(text:string,state=''){const node=el('feedback');node.textContent=text;node.className=state;}
 function markDirty(text='有未保存的修改。'){dirty=true;feedback(text,'dirty');}
@@ -12,7 +12,7 @@ function speechStatus(text:string,state=''){localStatus('speech-feedback',text,s
 function paintCaptionOriginal(showOriginal:boolean){el<HTMLInputElement>('caption-original').checked=showOriginal;}
 el('caption-original').addEventListener('change',()=>{
   const showOriginal=el<HTMLInputElement>('caption-original').checked;
-  void rpc('caption:save',{patch:{showOriginal}}).then(()=>localStatus('reading-feedback','')).catch(err=>localStatus('reading-feedback',err instanceof Error?err.message:'字幕设置保存失败。','error'));
+  void rpc('caption:save',{patch:{showOriginal}}).then(()=>localStatus('reading-feedback','字幕原文显示已更新。','success')).catch(err=>localStatus('reading-feedback',err instanceof Error?err.message:'字幕设置保存失败。','error'));
 });
 function capture(){
   const profile=settings?.profiles.find(item=>item.id===editing);if(!profile)return;
@@ -156,12 +156,14 @@ function paintSpeech(speech:SpeechSettings){
   readSpeechAddress();speechModelHelp();
 }
 async function init(){
-  settings=await rpc<Settings>('settings:get');editing=settings.activeProfileId;
-  languageOptions(el<HTMLSelectElement>('target'));applyReading();fillProfile();ready=true;
-  try{paintSpeech(await rpc<SpeechSettings>('speech:settings-get'));}catch(error){speechStatus(error instanceof Error?error.message:'无法读取语音配置。','error');}
-  try{origins=await rpc<string[]>('selection:origins');await renderOrigins();}catch(error){localStatus('selection-feedback',error instanceof Error?error.message:'无法读取划词范围。','error');}
-  try{await refreshUsage();}catch(error){localStatus('data-feedback',error instanceof Error?error.message:'无法读取用量。','error');}
-  try{paintCaptionOriginal((await rpc<CaptionLayout>('caption:get')).showOriginal);}catch(error){localStatus('reading-feedback',error instanceof Error?error.message:'无法读取字幕设置。','error');}
+  try{
+    settings=await rpc<Settings>('settings:get');editing=settings.activeProfileId;
+    languageOptions(el<HTMLSelectElement>('target'));applyReading();fillProfile();ready=true;
+    try{paintSpeech(await rpc<SpeechSettings>('speech:settings-get'));}catch(error){speechStatus(error instanceof Error?error.message:'无法读取语音配置。','error');}
+    try{origins=await rpc<string[]>('selection:origins');await renderOrigins();}catch(error){localStatus('selection-feedback',error instanceof Error?error.message:'无法读取划词范围。','error');}
+    try{await refreshUsage();}catch(error){localStatus('data-feedback',error instanceof Error?error.message:'无法读取用量。','error');}
+    try{paintCaptionOriginal((await rpc<CaptionLayout>('caption:get')).showOriginal);}catch(error){localStatus('reading-feedback',error instanceof Error?error.message:'无法读取字幕设置。','error');}
+  }finally{speechReady=true;}
 }
 chrome.storage.onChanged.addListener((changes,area)=>{
   if(area!=='local'||!settings)return;
@@ -185,6 +187,7 @@ async function saveSpeech(test=false){
 }
 el('speech-form').addEventListener('submit',event=>{event.preventDefault();void saveSpeech();});
 el('speech-test').addEventListener('click',()=>void saveSpeech(true));
+el('speech-form').addEventListener('input',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
 function speechModelHelp(){const streaming=isStreaming(value('speech-model').trim());el<HTMLTextAreaElement>('speech-context').maxLength=streaming?400:2000;el('speech-context-help').textContent=streaming?'3.1 Streaming 最多 400 字。':'原版术语最多 2000 字。';el('speech-address-help').textContent=streaming?'3.1 需要业务空间地址。填写 Workspace ID 后自动生成，Key 须匹配地域和业务空间。':'可使用默认地址或业务空间地址，Key 须匹配地域。';}
 function readSpeechAddress(){try{const url=new URL(value('speech-endpoint')),match=url.hostname.match(/^([a-zA-Z0-9-]+)\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/);el<HTMLInputElement>('speech-workspace').value=match?.[1]??'';el<HTMLSelectElement>('speech-region').value=match?.[2]??(url.hostname==='dashscope-intl.aliyuncs.com'?'ap-southeast-1':'cn-beijing');}catch{}}
 function buildSpeechAddress(){
@@ -193,7 +196,7 @@ function buildSpeechAddress(){
   let local:URL|undefined;try{const parsed=new URL(value('speech-endpoint'));if(parsed.protocol==='ws:'&&['127.0.0.1','localhost','[::1]'].includes(parsed.hostname)&&!workspace)local=parsed;}catch{}
   const host=workspace?`${workspace}.${region}.maas.aliyuncs.com`:region==='ap-southeast-1'?'dashscope-intl.aliyuncs.com':'dashscope.aliyuncs.com';
   el<HTMLInputElement>('speech-endpoint').value=`${local?.origin??'wss://'+host}/api-ws/v1/${streaming?'inference':'realtime'}`;
-  speechStatus(streaming&&!workspace&&!local?'请填写对应地域的 Workspace ID，或粘贴完整业务空间地址。':'有未保存的语音配置。',streaming&&!workspace&&!local?'error':'');
+  speechStatus(streaming&&!workspace&&!local?'请填写对应地域的 Workspace ID，或粘贴完整业务空间地址。':'有未保存的语音配置。',streaming&&!workspace&&!local?'error':'dirty');
 }
 for(const id of ['speech-model','speech-region','speech-workspace'])el(id).addEventListener('change',buildSpeechAddress);
 el('speech-endpoint').addEventListener('change',readSpeechAddress);
@@ -206,16 +209,21 @@ function setActiveNav(id:string){
   }
 }
 function sectionFromScroll(){
-  const items=navLinks.map(link=>({id:link.getAttribute('href')?.slice(1)||'',section:document.getElementById(link.getAttribute('href')?.slice(1)||'')})).filter(item=>item.section);
+  const items=navLinks.map(link=>{const id=link.getAttribute('href')?.slice(1)||'';return {id,section:id?document.getElementById(id):null};}).filter(item=>item.section);
   if(!items.length)return 'providers';
-  if(window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-4)return items[items.length-1].id;
-  const marker=Math.min(160,window.innerHeight*0.3);let current=items[0].id;
-  for(const item of items)if(item.section!.getBoundingClientRect().top<=marker)current=item.id;
-  return current;
+  // Hash wins only while its heading is near the top, so a tall window does not keep the last section lit.
+  const hash=location.hash.slice(1),hashBand=Math.min(640,window.innerHeight*0.72);
+  if(hash){const target=items.find(item=>item.id===hash);const top=target?.section!.getBoundingClientRect().top??Number.POSITIVE_INFINITY;if(top>=-8&&top<=hashBand)return hash;}
+  const atEnd=window.scrollY>0&&window.scrollY+window.innerHeight>=document.documentElement.scrollHeight-4;
+  if(atEnd)return items[items.length-1].id;
+  const marker=Math.min(160,Math.max(72,window.innerHeight*0.24));let crossed=items[0].id;
+  for(const item of items){const rect=item.section!.getBoundingClientRect();if(rect.top<=marker&&rect.bottom>marker)return item.id;if(rect.top<=marker)crossed=item.id;}
+  return crossed;
 }
 function syncNav(){setActiveNav(sectionFromScroll());}
 for(const link of navLinks)link.addEventListener('click',()=>{const id=link.getAttribute('href')?.slice(1);if(id)setActiveNav(id);});
 document.addEventListener('scroll',syncNav,{passive:true});
 window.addEventListener('hashchange',syncNav);
+window.addEventListener('resize',syncNav);
 syncNav();
 requestAnimationFrame(()=>requestAnimationFrame(syncNav));
