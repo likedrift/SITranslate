@@ -1,8 +1,9 @@
 import {DEFAULT_SPEECH,IDLE_SPEECH,isSpeechStatus,normalizeSpeech,speechAuthRule,speechStatusOrIdle,type SpeechStatus,type SpeechSettings} from './core/speech';
 import {liveInterruptHint} from './core/live-hints';
 import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver} from './core/types';
-import {Utterances,enqueuePiece,type SpeechPiece} from './core/utterances';
-import {SpeechDiagnostics} from './core/speech-diagnostics';
+import {Utterances,enqueuePiece,LIVE_QUEUE_LIMIT,type SpeechPiece} from './core/utterances';
+import {SpeechDiagnostics,diagnosticSettings} from './core/speech-diagnostics';
+const SKIP_AFTER_MS=12000,EXPIRE_AFTER_MS=15000,TRANSLATION_TIMEOUT_MS=12000;
 export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number,observer?:TranslationObserver)=>Promise<TranslationResult>;cancel:(taskId:string)=>void}){
   let state:SpeechStatus={...IDLE_SPEECH},config:PublicConfig,queue:SpeechPiece[]=[],busy=false,epoch=0,context='',shownOrder=-1;
   const utterances=new Utterances(),latest=new Map<string,string>(),translatedPieces=new Map<string,string>(),finalItems=new Set<string>();
@@ -29,12 +30,12 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   }
   async function pump(){
     if(busy||state.state!=='active'||testing)return;const item=queue.shift();if(!item)return;
-    if(Date.now()-item.at>12000){if(item.traceId)diagnostics.update(item.traceId,{outcome:'skipped'});state.message='翻译跟不上语速，已跳过过期片段。';void persist();void pump();return;}
+    if(Date.now()-item.at>SKIP_AFTER_MS){if(item.traceId)diagnostics.update(item.traceId,{outcome:'skipped'});state.message='翻译跟不上语速，已跳过过期片段。';void persist();void pump();return;}
     if(translatedPieces.get(item.id)===item.text){void pump();return;}
     busy=true;const run=epoch,sessionId=state.sessionId,tabId=state.tabId,started=Date.now(),queueMs=started-item.at,requestId=crypto.randomUUID(),traceId=item.traceId!;let networkAt=started,firstTextAt=0;
     diagnostics.update(traceId,{queueMs});
     inflight={id:item.id,version:requestId,traceId};
-    const timeout=setTimeout(()=>{if(run===epoch){deps.cancel(`subtitle-live-${sessionId}`);diagnostics.update(traceId,{outcome:'failed'});for(const p of queue)if(p.traceId)diagnostics.update(p.traceId,{outcome:'skipped'});epoch++;queue=[];busy=false;void caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译超时，请点击重新开始，或更换更快的翻译模型。';void persist();}},12000);
+    const timeout=setTimeout(()=>{if(run===epoch){deps.cancel(`subtitle-live-${sessionId}`);diagnostics.update(traceId,{outcome:'failed'});for(const p of queue)if(p.traceId)diagnostics.update(p.traceId,{outcome:'skipped'});epoch++;queue=[];busy=false;void caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译超时，请点击重新开始，或更换更快的翻译模型。';void persist();}},TRANSLATION_TIMEOUT_MS);
     const valid=()=>run===epoch&&state.state==='active'&&latest.get(item.id)===item.text&&item.order>=shownOrder;
     try{
       const result=await deps.translate({kind:'subtitle',taskId:`subtitle-live-${sessionId}`,requestId,profileId:config.profileId,target:config.target,blocks:[{id:'live',context:item.context??'',segments:[{id:'live',text:item.text}]}]},tabId,{
@@ -42,7 +43,9 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
         token:()=>diagnostics.update(traceId,{firstTokenMs:Date.now()-networkAt}),
         text:text=>{if(!valid())return;if(!firstTextAt){firstTextAt=Date.now();diagnostics.update(traceId,{firstTextMs:firstTextAt-networkAt});}void caption({source:item.text,translation:text,pieceId:item.id,version:requestId,traceId,sourceEndAt:item.sourceEndAt,partial:true});}
       });
-      if(run!==epoch||state.state!=='active'||Date.now()-item.at>15000)return;
+      if(run!==epoch||state.state!=='active')return;
+      // The provisional caption is already on screen. Dropping the late result without a failure leaves the reader on “生成中”.
+      if(Date.now()-item.at>EXPIRE_AFTER_MS){if(latest.has(item.id))translatedPieces.set(item.id,item.text);diagnostics.update(traceId,{outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});state.message='翻译跟不上语速，已跳过过期片段。';void persist();return;}
       if(latest.has(item.id))translatedPieces.set(item.id,item.text);
       if(!valid()){diagnostics.update(traceId,{outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});return;}
       shownOrder=item.order;
@@ -91,13 +94,15 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       const transcriptEpoch=epoch;state.lastSource=(text+preview).slice(0,2000);await caption({source:state.lastSource,preview:true});
       if(transcriptEpoch!==epoch||m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;
       if(Number.isSafeInteger(m.beginMs)&&m.beginMs>=0)state.sourceTime={beginMs:m.beginMs,...(Number.isSafeInteger(m.endMs)&&m.endMs>=m.beginMs?{endMs:m.endMs}:{})};
-      const itemId=String(m.itemId??'unknown').slice(0,100),receivedAt=Number.isFinite(m.receivedAt)&&Math.abs(Date.now()-m.receivedAt)<10000?m.receivedAt:Date.now(),previous=sourceMeta.get(itemId);counters.asrEvents++;if(!m.final){counters.asrIntermediate++;if(text)counters.asrStableIntermediate++;}sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(Number.isFinite(m.sourceEndAt)&&m.sourceEndAt<=receivedAt&&m.sourceEndAt>receivedAt-60000?{sourceEndAt:m.sourceEndAt}:{})});while(sourceMeta.size>32)sourceMeta.delete(sourceMeta.keys().next().value!);enqueue(utterances.update(itemId,text,!!m.final));
+      const itemId=String(m.itemId??'unknown').slice(0,100),receivedAt=Number.isFinite(m.receivedAt)&&Math.abs(Date.now()-m.receivedAt)<10000?m.receivedAt:Date.now(),previous=sourceMeta.get(itemId);counters.asrEvents++;if(!m.final){counters.asrIntermediate++;if(text)counters.asrStableIntermediate++;}
+      const incomingEnd=Number.isFinite(m.sourceEndAt)&&m.sourceEndAt<=receivedAt&&m.sourceEndAt>receivedAt-60000?m.sourceEndAt:undefined,carriedEnd=previous?.sourceEndAt!==undefined&&previous.sourceEndAt<=receivedAt&&previous.sourceEndAt>receivedAt-60000?previous.sourceEndAt:undefined,sourceEndAt=incomingEnd??carriedEnd;
+      sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(sourceEndAt!==undefined?{sourceEndAt}:{})});while(sourceMeta.size>32)sourceMeta.delete(sourceMeta.keys().next().value!);enqueue(utterances.update(itemId,text,!!m.final));
       if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>64)finalItems.delete(finalItems.values().next().value!);context=(context+' '+text).slice(-600);}
       if(m.final)await persist();return;
     }
     if(m.type==='speech:stop'&&!ui){if(sender.tab?.id!==state.tabId||m.sessionId!==state.sessionId)throw new Error('无权停止其他标签页音频。');const hint=liveInterruptHint(m.cause);return serial(()=>m.sessionId===state.sessionId?stop(hint,false,hint):Promise.resolve(state));}
     if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
-    if(m.type==='speech:diagnostics')return {extensionVersion:chrome.runtime.getManifest().version,...diagnostics.report(),counters:{...counters}};
+    if(m.type==='speech:diagnostics'){const local=await chrome.storage.local.get(['speechSettings','settings','captionLayout']);const speech=local.speechSettings??DEFAULT_SPEECH,profile=(local.settings?.profiles??[]).find((item:{id?:string;model?:unknown;stream?:unknown})=>item?.id===local.settings?.activeProfileId),target=(typeof config==='undefined'?undefined:config?.target)??local.settings?.target;return {extensionVersion:chrome.runtime.getManifest().version,...diagnostics.report(),counters:{...counters},settings:diagnosticSettings({asrModel:speech.model,language:speech.language,textModel:profile?.model,textStream:profile?.stream,readingMode:local.captionLayout?.readingMode??'balanced',target}),policy:{maxQueue:LIVE_QUEUE_LIMIT,skipAfterMs:SKIP_AFTER_MS,expireAfterMs:EXPIRE_AFTER_MS,translationTimeoutMs:TRANSLATION_TIMEOUT_MS}};}
     if(m.type==='speech:diagnostics-clear'){diagnostics.clear();counters={asrEvents:0,asrIntermediate:0,asrStableIntermediate:0};await persist();return true;}
     if(m.type==='speech:settings-get')return (await chrome.storage.local.get('speechSettings')).speechSettings??DEFAULT_SPEECH;
     if(m.type==='speech:settings-save'){const next=normalizeSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:next});return true;}
