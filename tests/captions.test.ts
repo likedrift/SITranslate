@@ -63,6 +63,22 @@ test('Long unpunctuated Japanese is bounded and confirmed tails flush after 800 
   const u=new Utterances(),text='あいうえおかきくけこ'.repeat(13),a=u.update('one',text,false,0);assert.ok(a.length>=2);assert.ok(a.every(p=>Array.from(p.text).length<=48));
   assert.deepEqual(u.flush(799),[]);const b=u.flush(800);assert.equal(a.map(p=>p.text).join('')+b.map(p=>p.text).join(''),text);assert.deepEqual(u.flush(3000),[]);
 });
+test('Unfinished tails are due 800 ms after the last commit and later partials do not move that time',()=>{
+  const u=new Utterances(),tail='あいうえおかきくけこさし';
+  assert.equal(tail.length,12);
+  assert.deepEqual(u.update('one',tail,false,0),[]);
+  assert.equal(u.nextTailFlushAt(),800);
+  assert.deepEqual(u.update('one',tail+'すせ',false,400),[]);
+  assert.equal(u.nextTailFlushAt(),800);
+  assert.deepEqual(u.flush(799),[]);
+  assert.deepEqual(u.flush(800).map(p=>p.text),[tail+'すせ']);
+  assert.equal(u.nextTailFlushAt(),undefined);
+  const held=new Utterances(),prefixed=held.update('two','今日は晴れです。'+tail,false,1000);
+  assert.deepEqual(prefixed.map(p=>p.text),['今日は晴れです。']);
+  assert.equal(held.nextTailFlushAt(),1800);
+  const short=new Utterances();short.update('three','あいうえお',false,0);assert.equal(short.nextTailFlushAt(),undefined);
+  const done=new Utterances();done.update('four','今日は晴れです。',false,0);assert.equal(done.nextTailFlushAt(),undefined);
+});
 test('Pending corrections replace the same piece, retain newest three, and preserve distinct identical utterances',()=>{
   const p=(id:string,order:number,text=id):SpeechPiece=>({id,order,text,final:true,at:0});let queue:SpeechPiece[]=[];
   queue=enqueuePiece(queue,p('one',0));queue=enqueuePiece(queue,p('one',0,'updated'));assert.equal(queue.length,1);assert.equal(queue[0].text,'updated');
