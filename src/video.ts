@@ -3,6 +3,7 @@ import {cueIndex,activeSubtitle,subtitleText,type SubtitleCue} from './core/subt
 import {DEFAULT_CAPTION,normalizeCaption,captionBounds,captionPages,clamp,resizeCaptionBox,type CaptionLayout,type CaptionBox,type CaptionCorner} from './core/caption-layout';
 import {LiveReader} from './core/live-reader';
 import {PAUSE_SCROLL_NOTE,liveInterruptHint} from './core/live-hints';
+import {LiveSeekGuard} from './core/live-seek';
 
 // Loaded only after an explicit video action; ordinary pages do not load this module.
 const scope=globalThis as typeof globalThis&{__siVideoTranslate?:boolean};
@@ -249,8 +250,16 @@ function boot(){
         status={state:'active',source:'标签页音频',message:'实时语音字幕已开启。',completed:0,bilingual:layout.showOriginal};overlay();
         youtube=!!video&&(location.hostname==='youtube.com'||location.hostname.endsWith('.youtube.com'))&&!!video.closest('#movie_player');
         mediaSource=video?.currentSrc??'';videoId=new URL(location.href).searchParams.get('v')??'';
-        if(video){listen(video,'seeking',()=>interrupt('seek'));listen(video,'emptied',()=>interrupt('video'));}listen(document,'fullscreenchange',render);
-        timer=setInterval(()=>{if(ending){render();return;}if(liveSession&&video&&(!video.isConnected||videoSourceChanged()))interrupt('video');else render();},250);render();respond(true);
+        const seekGuard=new LiveSeekGuard();
+        if(video){
+          seekGuard.note(video.currentTime,video.seeking);
+          const remember=()=>{if(video)seekGuard.note(video.currentTime,video.seeking);};
+          listen(video,'timeupdate',remember);
+          listen(video,'seeking',()=>{if(video&&seekGuard.onSeeking(video.duration,video.currentTime))interrupt('seek');});
+          listen(video,'emptied',()=>interrupt('video'));
+        }
+        listen(document,'fullscreenchange',render);
+        timer=setInterval(()=>{if(ending){render();return;}if(liveSession&&video&&(!video.isConnected||videoSourceChanged()))interrupt('video');else{if(video)seekGuard.note(video.currentTime,video.seeking);render();}},250);render();respond(true);
       })().catch(()=>{try{respond(false);}catch{}});
       return true;
     }
