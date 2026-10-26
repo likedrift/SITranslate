@@ -5,7 +5,7 @@ import {adapterFor,retryDelayMs} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
-import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
+import {DEFAULT_CAPTION,captionGeometryPatch,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
 import {streamSegment} from './core/stream-text';
 import {isLiveSubtitle} from './core/live-translate';
 
@@ -164,10 +164,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     if(!['normal','fullscreen'].includes(message.context))throw new Error('字幕位置类型无效。');
     return saveCaption({[message.context]:message.position});
   }
-  if(message.type==='caption:geometry'&&pageSender(sender)){
-    if(!['normal','fullscreen'].includes(message.context))throw new Error('字幕位置类型无效。');
-    return saveCaption({[message.context]:message.position,[message.context+'Size']:message.size});
-  }
+  if(message.type==='caption:geometry'&&pageSender(sender))return saveCaption(captionGeometryPatch(String(message.context??''),message.position,message.size,message.fontSize));
   if(message.type==='selection:state'&&(ui||pageSender(sender)))return selectionState(ui?String(message.url??''):sender.url!);
   if(message.type==='translate')return translate(message.input,sender);
   if(message.type==='page:config'&&pageSender(sender))return safeConfig();

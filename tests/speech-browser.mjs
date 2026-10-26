@@ -36,6 +36,7 @@ const activate=()=>worker.evaluate(id=>chrome.tabs.update(id,{active:true}),tabI
 async function until(fn,timeout=18000){const end=Date.now()+timeout;while(Date.now()<end){if(await fn())return;await new Promise(resolve=>setTimeout(resolve,100));}throw new Error('Condition timed out: '+JSON.stringify(await rpc('speech:status')));}
 async function step(name,fn){await fn();results.push({name,passed:true});console.log('PASS '+name);}
 async function captionTexts(){const cdp=await context.newCDPSession(page);try{return (await cdp.send('Accessibility.getFullAXTree')).nodes.filter(n=>n.role?.value==='StaticText').map(n=>n.name?.value??'');}finally{await cdp.detach();}}
+async function captionHas(name){const cdp=await context.newCDPSession(page);try{return (await cdp.send('Accessibility.getFullAXTree')).nodes.some(n=>n.role?.value==='button'&&n.name?.value===name);}finally{await cdp.detach();}}
 async function captionClick(name){const cdp=await context.newCDPSession(page);try{const node=(await cdp.send('Accessibility.getFullAXTree')).nodes.find(n=>n.role?.value==='button'&&n.name?.value===name);assert.ok(node,'Missing caption control: '+name);const {model}=await cdp.send('DOM.getBoxModel',{backendNodeId:node.backendDOMNodeId});await page.mouse.click((model.content[0]+model.content[2])/2,(model.content[1]+model.content[5])/2);}finally{await cdp.detach();}}
 try{
   await step('Offline AudioWorklet resamples and mixes nonzero stereo into 100 ms mono frames without any audio device',async()=>{
@@ -160,7 +161,7 @@ try{
     await page.evaluate(()=>{document.querySelector('video')?.remove();const video=document.createElement('video');video.style.cssText='width:720px;height:405px;background:#202438';document.body.prepend(video);});
   });
   await step('Seeking or switching video stops audio and keeps a restart hint until the user starts again',async()=>{
-    await page.locator('#silent-audio').click();await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active'&&(await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));
+    await page.locator('#silent-audio').click();await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active'&&await captionHas('字幕操作'));assert.ok(!(await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));
     await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('seeking')));await until(async()=>(await rpc('speech:status')).state==='stopped');
     assert.match((await rpc('speech:status')).message,/拖动进度/);assert.match((await rpc('speech:status')).message,/开始实时翻译/);
     await until(async()=>(await captionTexts()).some(t=>t.includes('开始实时翻译')));assert.equal(await page.locator('[data-si-owned=video]').count(),1);assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
@@ -239,7 +240,7 @@ try{
   await step('Reading controls preserve the current sentence while new translations arrive and allow reviewing the previous caption',async()=>{
     await page.evaluate(()=>{globalThis.pageClicks=0;document.body.addEventListener('click',()=>globalThis.pageClicks++);});
     const end=mock.stats.audioMs;await new Promise(r=>setTimeout(r,120));mock.emitStreaming({sentence_id:20,begin_time:0,end_time:end,sentence_end:true,text:'閲読一。'});
-    await until(async()=>(await captionTexts()).includes(translatedText('閲読一。')));assert.ok((await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));assert.match(await popup.locator('#caption-pause-note').textContent()??'',/不会停止采集和计费/);await captionClick('暂停字幕滚动');mock.emitStreaming({sentence_id:21,begin_time:end,end_time:mock.stats.audioMs,sentence_end:true,text:'閲読二。'});await until(async()=>(await rpc('speech:status')).lastTranslation===translatedText('閲読二。'));
+    await until(async()=>(await captionTexts()).includes(translatedText('閲読一。')));assert.ok(!(await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));assert.match(await popup.locator('#caption-pause-note').textContent()??'',/不会停止采集和计费/);await captionClick('字幕操作');assert.ok((await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));await captionClick('暂停字幕滚动');mock.emitStreaming({sentence_id:21,begin_time:end,end_time:mock.stats.audioMs,sentence_end:true,text:'閲読二。'});await until(async()=>(await rpc('speech:status')).lastTranslation===translatedText('閲読二。'));
     assert.ok((await captionTexts()).includes(translatedText('閲読一。')));assert.ok(!(await captionTexts()).includes(translatedText('閲読二。')));await captionClick('回到最新');await until(async()=>(await captionTexts()).includes(translatedText('閲読二。')));assert.ok((await captionTexts()).some(t=>t.startsWith('上一条：')));await captionClick('上一条译文');assert.ok((await captionTexts()).includes(translatedText('閲読一。')));await page.screenshot({path:'artifacts/live-reading-controls.png'});await captionClick('回到最新');
     const d=await rpc('speech:diagnostics');assert.ok(d.metrics.asrMs?.samples>0);assert.ok(d.metrics.displayWaitMs?.samples>0);assert.equal(await page.evaluate(()=>globalThis.pageClicks),0);
   });

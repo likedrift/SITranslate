@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,captionBounds,captionPages,resizeCaptionBox,type CaptionCorner} from '../src/core/caption-layout.ts';
+import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,captionBounds,captionChrome,captionGeometryPatch,captionGestureLayout,captionPages,resizeCaptionBox,scaleCaptionFont,type CaptionCorner} from '../src/core/caption-layout.ts';
 import {NO_VIDEO_CAPTION_MESSAGE} from '../src/core/types.ts';
 import {Utterances,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
 test('Caption original display migrates once onto showOriginal',()=>{
@@ -51,6 +51,28 @@ test('Manual dimensions scale within bounds, fullscreen size stays independent, 
   const normal=captionBounds(rect,1000,600,s,100),full=captionBounds(rect,1000,600,s,100,true),small=captionBounds(rect,600,400,s,100);
   assert.equal(normal.width,984*.5);assert.equal(normal.height,560*.3);assert.equal(full.width,984*.8);assert.ok(small.width<normal.width&&small.height<normal.height);
   for(const size of [null,{width:NaN,height:.5},{width:.5,height:0},{width:1.1,height:.5},{width:.5,height:Infinity}])assert.throws(()=>validateCaption({...s,normalSize:size} as any));
+});
+test('Corner resize scales font with width, dragging only moves, and fullscreen geometry stays independent',()=>{
+  const area={left:0,top:0,width:1000,height:600},box={left:100,top:120,width:400,height:80};
+  const base={...DEFAULT_CAPTION,fontSize:22,normal:{x:.2,y:.3},normalSize:{width:.4,height:.2},fullscreen:{x:.1,y:.2},fullscreenSize:{width:.5,height:.25}};
+  assert.equal(scaleCaptionFont(22,400,600),33);assert.equal(scaleCaptionFont(22,400,80),14);assert.equal(scaleCaptionFont(36,200,900),40);assert.equal(scaleCaptionFont(22,400,400),22);
+  const moved=captionGestureLayout(base,{full:false,box,area,dx:80,dy:-40,minHeight:48});
+  assert.equal(moved.fontSize,22);assert.deepEqual(moved.normalSize,base.normalSize);assert.deepEqual(moved.fullscreen,base.fullscreen);assert.deepEqual(moved.fullscreenSize,base.fullscreenSize);
+  assert.notDeepEqual(moved.normal,base.normal);assert.equal(base.fontSize,22);
+  const taller=captionGestureLayout(base,{full:false,corner:'se',box,area,dx:0,dy:80,minHeight:48});
+  assert.equal(taller.fontSize,22);assert.ok(taller.normalSize&&taller.normalSize.height>base.normalSize.height);assert.equal(taller.normalSize.width,base.normalSize.width);
+  const grown=captionGestureLayout(base,{full:false,corner:'se',box,area,dx:200,dy:40,minHeight:48});
+  assert.equal(grown.fontSize,33);assert.ok(grown.normalSize&&grown.normalSize.width>.4);assert.deepEqual(grown.fullscreenSize,base.fullscreenSize);assert.deepEqual(grown.fullscreen,base.fullscreen);
+  const full=captionGestureLayout(base,{full:true,corner:'nw',box,area,dx:-80,dy:-20,minHeight:48});
+  assert.ok(full.fontSize>22);assert.deepEqual(full.normal,base.normal);assert.deepEqual(full.normalSize,base.normalSize);assert.ok(full.fullscreenSize&&full.fullscreenSize.width<base.fullscreenSize.width);
+  const movePatch=captionGeometryPatch('normal',moved.normal,moved.normalSize),resizePatch=captionGeometryPatch('normal',grown.normal,grown.normalSize,grown.fontSize);
+  assert.equal('fontSize' in movePatch,false);assert.equal(resizePatch.fontSize,33);assert.equal(resizePatch.fullscreenSize,undefined);
+  validateCaption({...DEFAULT_CAPTION,...resizePatch,fontSize:resizePatch.fontSize??22});
+  assert.throws(()=>captionGeometryPatch('hover',moved.normal,moved.normalSize));
+  assert.deepEqual(captionChrome(false,true,1),{toggle:true,menu:false,pager:false,tools:true});
+  assert.deepEqual(captionChrome(true,true,3),{toggle:true,menu:true,pager:true,tools:true});
+  assert.deepEqual(captionChrome(true,false,1),{toggle:false,menu:false,pager:false,tools:false});
+  assert.deepEqual(captionChrome(false,false,4),{toggle:true,menu:false,pager:true,tools:false});
 });
 test('Growing utterance translates completed prefixes once and emits only the new sentence',()=>{
   const u=new Utterances();assert.deepEqual(u.update('one','今日は',false,0),[]);
