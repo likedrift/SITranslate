@@ -250,14 +250,14 @@ try{
     await page.evaluate(()=>document.exitFullscreen());await act('start');await complete();assert.equal((await rpc('video:status')).state,'active');await act('restore');
   });
   await step('Caption dragging persists across timers and restart, fullscreen positions are independent, and layout changes send no model requests',async()=>{
-    const before=requests.length,initial=await page.locator('[data-si-owned=video]').boundingBox(),handle=await captionHandle();assert.ok(handle);
-    await page.mouse.move(handle.x,handle.y);await page.mouse.down();await page.mouse.move(handle.x+45,handle.y-80,{steps:6});await page.mouse.up();
-    await until(async()=>!!(await rpc('caption:get')).normal);const moved=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(moved.y<initial.y-40);assert.ok(moved.x>initial.x+20);
+    const before=requests.length,initial=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(initial);assert.equal(await captionHandle(),undefined);const fontBefore=(await rpc('caption:get')).fontSize;
+    const point={x:initial.x+initial.width/2,y:initial.y+initial.height/2};await page.mouse.move(point.x,point.y);await page.mouse.down();await page.mouse.move(point.x+45,point.y-80,{steps:6});await page.mouse.up();
+    await until(async()=>!!(await rpc('caption:get')).normal);assert.equal((await rpc('caption:get')).fontSize,fontBefore);const moved=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(moved.y<initial.y-40);assert.ok(moved.x>initial.x+20);
     await new Promise(r=>setTimeout(r,500));const stable=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(Math.abs(stable.y-moved.y)<2);
     await videoAct('stop');await videoAct('start');await until(async()=> (await captionText()).includes('你好，世界。'));const reopened=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(Math.abs(reopened.y-moved.y)<2);
-    const normal=(await rpc('caption:get')).normal;await page.locator('#fullscreen').click();await until(async()=>!!await page.evaluate(()=>document.fullscreenElement));await until(async()=>!!await captionHandle());const fullHandle=await captionHandle();await page.mouse.move(fullHandle.x,fullHandle.y);await page.mouse.down();await page.mouse.move(fullHandle.x-30,fullHandle.y-35,{steps:4});await page.mouse.up();await until(async()=>!!(await rpc('caption:get')).fullscreen);assert.deepEqual((await rpc('caption:get')).normal,normal);await page.evaluate(()=>document.exitFullscreen());
-    await rpc('caption:save',{patch:{locked:true,fontSize:28,width:80,opacity:.5,mode:'screen'}});await until(async()=>!await captionHandle());await activate();await popup.reload();await popup.getByText('字幕位置与显示',{exact:true}).click();assert.equal(await popup.locator('#caption-font').inputValue(),'28');assert.ok(await popup.locator('#caption-lock').isChecked());
-    await popup.locator('#caption-reset').click();await until(async()=>!(await rpc('caption:get')).normal);assert.ok(!(await rpc('caption:get')).locked);await until(async()=>!!await captionHandle());assert.equal(requests.length,before);
+    const normal=(await rpc('caption:get')).normal;await page.locator('#fullscreen').click();await until(async()=>!!await page.evaluate(()=>document.fullscreenElement));await until(async()=>!!await captionButton('左上角缩放字幕'));const fullBox=await page.locator('[data-si-owned=video]').boundingBox();assert.ok(fullBox);const fullPoint={x:fullBox.x+fullBox.width/2,y:fullBox.y+fullBox.height/2};await page.mouse.move(fullPoint.x,fullPoint.y);await page.mouse.down();await page.mouse.move(fullPoint.x-30,fullPoint.y-35,{steps:4});await page.mouse.up();await until(async()=>!!(await rpc('caption:get')).fullscreen);assert.deepEqual((await rpc('caption:get')).normal,normal);assert.equal(await captionHandle(),undefined);await page.evaluate(()=>document.exitFullscreen());
+    await rpc('caption:save',{patch:{locked:true,fontSize:28,width:80,opacity:.5,mode:'screen'}});await until(async()=>!await captionButton('左上角缩放字幕'));await activate();await popup.reload();await popup.getByText('字幕位置与显示',{exact:true}).click();assert.equal(await popup.locator('#caption-font').inputValue(),'28');assert.ok(await popup.locator('#caption-lock').isChecked());
+    await popup.locator('#caption-reset').click();await until(async()=>!(await rpc('caption:get')).normal);assert.ok(!(await rpc('caption:get')).locked);await until(async()=>!!await captionButton('右下角缩放字幕'));assert.equal(await captionHandle(),undefined);assert.equal(requests.length,before);
     await page.screenshot({path:'artifacts/video-layout.png'});
   });
   await step('Dragging the caption body and all four resize corners persist geometry, preserve opposite anchors, cancel safely and respect locking',async()=>{
@@ -266,7 +266,7 @@ try{
     await page.evaluate(()=>{globalThis.captionPageClicks=0;document.body.addEventListener('click',()=>globalThis.captionPageClicks++);});
     const initial=await box(),point={x:initial.x+initial.width/2,y:initial.y+initial.height/2};
     await page.mouse.move(point.x,point.y);await page.mouse.down();await page.mouse.move(point.x-45,point.y-45,{steps:5});await page.mouse.up();
-    await until(async()=>!!(await rpc('caption:get')).normal);let moved=await box();assert.ok(Math.abs(moved.x-initial.x+45)<2&&Math.abs(moved.y-initial.y+45)<2);
+    await until(async()=>!!(await rpc('caption:get')).normal);assert.equal((await rpc('caption:get')).fontSize,22);let moved=await box();assert.ok(Math.abs(moved.x-initial.x+45)<2&&Math.abs(moved.y-initial.y+45)<2);assert.equal(await captionHandle(),undefined);
     for(const [label,west,north] of [['左上角',true,true],['右上角',false,true],['左下角',true,false],['右下角',false,false]]){
       const old=await box(),grip=await captionButton(label+'缩放字幕');assert.ok(grip);
       await page.mouse.move(grip.x,grip.y);await page.mouse.down();await page.mouse.move(grip.x+(west?-30:30),grip.y+(north?-20:20),{steps:5});await page.mouse.up();
@@ -274,14 +274,14 @@ try{
       const b=await box();assert.ok(Math.abs((west?b.x+b.width:b.x)-(west?old.x+old.width:old.x))<2);assert.ok(Math.abs((north?b.y+b.height:b.y)-(north?old.y+old.height:old.y))<2);
       await until(async()=>!!(await rpc('caption:get')).normalSize);
     }
-    await new Promise(r=>setTimeout(r,300));const resized=await box(),normal=await rpc('caption:get');assert.ok(normal.normalSize);
+    await new Promise(r=>setTimeout(r,300));const resized=await box(),normal=await rpc('caption:get');assert.ok(normal.normalSize);assert.ok(normal.fontSize>22);
     assert.equal(await page.evaluate(()=>globalThis.captionPageClicks),0);
     const grip=await captionButton('左上角缩放字幕');await page.mouse.move(grip.x,grip.y);await page.mouse.down();await page.mouse.move(grip.x-35,grip.y-30);await page.keyboard.press('Escape');await page.mouse.up();
     assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);const cancelled=await box();assert.ok(Math.abs(cancelled.width-resized.width)<2&&Math.abs(cancelled.y-resized.y)<2);
     await videoAct('stop');await videoAct('start');await until(async()=> (await captionText()).includes('你好，世界。'));moved=await box();assert.ok(Math.abs(moved.width-resized.width)<2&&Math.abs(moved.height-resized.height)<2&&Math.abs(moved.y-resized.y)<2);
     await page.locator('#fullscreen').click();await until(async()=>!!await page.evaluate(()=>document.fullscreenElement));await until(async()=>!!await captionButton('左上角缩放字幕'));const fullGrip=await captionButton('左上角缩放字幕');await page.mouse.move(fullGrip.x,fullGrip.y);await page.mouse.down();await page.mouse.move(fullGrip.x-20,fullGrip.y-15,{steps:3});await page.mouse.up();
     await until(async()=>!!(await rpc('caption:get')).fullscreenSize);assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);await page.evaluate(()=>document.exitFullscreen());
-    await rpc('caption:save',{patch:{locked:true}});await until(async()=>!await captionButton('左上角缩放字幕'));assert.ok(!await captionHandle());assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);
+    await rpc('caption:save',{patch:{locked:true}});await until(async()=>!await captionButton('左上角缩放字幕'));assert.equal(await captionHandle(),undefined);assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);
     await rpc('caption:save',{patch:{locked:false}});await until(async()=>!!await captionButton('右下角缩放字幕'));await page.screenshot({path:'artifacts/video-resize.png'});
     await rpc('caption:save',{patch:{opacity:.6}});assert.deepEqual((await rpc('caption:get')).normalSize,normal.normalSize);
     await rpc('caption:save',{patch:{width:75}});assert.equal((await rpc('caption:get')).normalSize,undefined);assert.equal((await rpc('caption:get')).fullscreenSize,undefined);
@@ -318,6 +318,7 @@ try{
     const before=requests.length;await rpc('caption:save',{patch:{mode:'screen',fontSize:40,width:35}});
     const send=data=>worker.evaluate(async({id,data})=>chrome.tabs.sendMessage(id,data),{id:tabId,data});
     await send({type:'video:live-start',sessionId:'layout-test'});await send({type:'video:live-caption',sessionId:'layout-test',source:'日本語の長い説明。'.repeat(10),translation:'这是需要完整显示的较长字幕。'.repeat(8)+'结尾标记'});
+    await until(async()=>!!await captionButton('字幕操作'));assert.equal(await captionButton('下一页字幕'),undefined);const opener=await captionButton('字幕操作');await page.mouse.click(opener.x,opener.y);
     await until(async()=>!!await captionButton('下一页字幕'));let sawEnd=false;
     for(let i=0;i<20;i++){if((await captionText()).includes('结尾标记')){sawEnd=true;break;}const next=await captionButton('下一页字幕');await page.mouse.click(next.x,next.y);}
     assert.ok(sawEnd);await page.setViewportSize({width:640,height:480});await until(async()=>{const bounds=await page.locator('[data-si-owned=video]').boundingBox();return bounds.x>=0&&bounds.x+bounds.width<=640&&bounds.y>=0&&bounds.y+bounds.height<=480;});
