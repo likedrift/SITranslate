@@ -97,6 +97,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(Date.now()-item.at>EXPIRE_AFTER_MS){for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});state.message='翻译跟不上语速，已跳过过期片段。';void persist();return;}
       for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);
       if(!valid()){note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});return;}
+      for(const part of parts)utterances.confirm(part.id,part.text);
       shownOrder=item.order;
       rateLimitStreak=0;
       state.lastTranslation=result.segments[0].text;state.completed++;state.message='正在识别并翻译标签页声音。';

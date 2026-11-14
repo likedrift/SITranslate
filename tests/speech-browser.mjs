@@ -115,6 +115,16 @@ try{
     const merged=[2,3,4,5,6].map(n=>`検証待機${n}。`).join('');
     await until(async()=> (await rpc('speech:status')).lastTranslation==='译：'+merged);assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証待機1。',merged]);translationDelay=0;await rpc('speech:stop');
   });
+  await step('A realtime timed prefix is translated once and the final cumulative snapshot sends only new words',async()=>{
+    await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).completed>0);
+    const before=requests.length,prefix='検証の前半の紹介を始めます',suffix='検証の後半も説明します。';
+    mock.emit({type:'conversation.item.input_audio_transcription.text',item_id:'timed-growth',text:prefix,stash:'まだ未確認'});
+    await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+prefix);
+    mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'timed-growth',transcript:prefix+suffix});
+    await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+suffix);
+    assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),[prefix,suffix]);
+    assert.ok(requests.at(-1)[0].context.includes(prefix));await rpc('speech:stop');
+  });
   await step('Worker restart keeps the capture session and restores its translation configuration',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');
     const session=await context.newCDPSession(ui),versions=new Map();session.on('ServiceWorker.workerVersionUpdated',e=>{for(const v of e.versions)versions.set(v.versionId,v);});await session.send('ServiceWorker.enable');await until(()=>[...versions.values()].some(v=>v.scriptURL===worker.url()));const version=[...versions.values()].find(v=>v.scriptURL===worker.url()),backgroundUrl=worker.url();
@@ -241,6 +251,15 @@ try{
     const before=requests.length;mock.emitStreaming({sentence_id:2,begin_time:1900,end_time:null,sentence_end:false,text:'検証の未確認の途中結果です。',words:[{text:'検証の未確認の途中結果です。',fixed:false}]});await new Promise(r=>setTimeout(r,2300));assert.equal(requests.length,before);
     mock.emitStreaming({sentence_id:2,begin_time:1900,end_time:null,sentence_end:false,text:'検証の前半です。未確認の後半',words:[{text:'検証の前半です。',fixed:true},{text:'未確認の後半',fixed:false}]});await until(async()=>(await rpc('speech:status')).lastTranslation==='译：検証の前半です。');
     mock.emitStreaming({sentence_id:2,begin_time:1900,end_time:4300,sentence_end:true,text:'検証の前半です。検証の後半です。'},{input_tokens:500,output_tokens:20});await until(async()=>(await rpc('speech:status')).lastTranslation==='译：検証の後半です。');assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証の前半です。','検証の後半です。']);await until(async()=>(await rpc('speech:status')).asrUsage.inputTokens===500);
+  });
+  await step('Streaming fixed tails, absent fixed markers and punctuation corrections cannot replay completed speech',async()=>{
+    const before=requests.length,prefix='検証の途中の言葉を紹介します',suffix='検証の新しい内容です。';
+    mock.emitStreaming({sentence_id:70,sentence_end:false,text:prefix,words:[{text:prefix,fixed:true}]});
+    await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+prefix);
+    mock.emitStreaming({sentence_id:70,sentence_end:false,text:prefix+suffix});
+    mock.emitStreaming({sentence_id:70,sentence_end:true,text:prefix+'、'+suffix});
+    await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+suffix);
+    assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),[prefix,suffix]);
   });
   await step('Streaming reconnect starts a new task, ignores old task results, and adds cumulative usage without double counting',async()=>{
     const old=mock.stats.lastRun.header.task_id,started=mock.stats.streamingStarts;mock.disconnect();await until(()=>mock.stats.streamingStarts>started);await until(async()=>(await rpc('speech:status')).lastTranslation==='大家好。'&&(await rpc('speech:status')).asrUsage.inputTokens===585);assert.notEqual(mock.stats.lastRun.header.task_id,old);

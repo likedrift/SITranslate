@@ -22,6 +22,25 @@ function activeSession(){
 }
 
 describe('live translation session',{concurrency:1},()=>{
+  test('a completed timed prefix is never retranslated or merged into its later suffix',async()=>{
+    const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
+    installChrome(activeSession(),speechLocal(),captions);const clock=installClock(1_700_000_000_000),hold=deferred();
+    const prefix='検証の前半の紹介を始めます',suffix='検証の後半も説明します。';
+    const translate=translating(seen,jobs,async index=>{if(index===2)await hold.promise;});
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+    try{
+      await speech.route({...transcript('growing',prefix),final:false},offscreen);clock.advance(800);await drain(jobs);
+      assert.deepEqual(seen,[prefix]);
+      await speech.route(transcript('hold','別の発言。'),offscreen);
+      await speech.route(transcript('growing',prefix+suffix),offscreen);
+      await speech.route(transcript('new','追加説明。'),offscreen);
+      hold.resolve();await drain(jobs);
+      assert.deepEqual(seen,[prefix,'別の発言。',suffix+'追加説明。']);
+      const completed=captions.filter(m=>m.translation&&!m.partial&&!m.preview);
+      assert.equal(completed.filter(m=>String(m.source).includes(prefix)).length,1);
+      const final=await speech.route({type:'speech:status'},ui) as {lastTranslation:string};assert.equal(final.lastTranslation,'译：'+suffix+'追加説明。');
+    }finally{hold.resolve();clock.restore();}
+  });
   test('A streamed translation that finishes after the segment is older than 15s withdraws 生成中 so the reader can advance',async()=>{
     const captions:Record<string,unknown>[]=[],session=activeSession();
     const local={speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key',context:'山田太郎'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true,baseUrl:'https://api.deepseek.com',apiKey:'secret-text-key'}]},captionLayout:{readingMode:'balanced'}};
