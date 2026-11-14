@@ -6,7 +6,7 @@ import {mkdir,cp,readFile,writeFile} from 'node:fs/promises';
 import path from 'node:path';
 import {mockASR} from './fixtures/mock-asr.mjs';
 const results=[],requests=[],prompts=[],streamTimings=[];let translationDelay=0,glossaryPromptAt=Number.POSITIVE_INFINITY;
-const translatedText=text=>text==='皆さん、こんにちは。'?'大家好。':text==='閲読一。'?'第一句字幕需要保留足够的时间才能看完。':text==='閲読二。'?'第二句字幕已经到达，前一句也应该可以回看。':text==='検証失敗。'?'需要撤回的临时译文':text.startsWith('検証')?'译：'+text:'这是直播中文字幕。';
+const translatedText=text=>text==='長文表示。'?'这是一段正在生成的中文字幕。'.repeat(7)+'末页新字':text==='皆さん、こんにちは。'?'大家好。':text==='閲読一。'?'第一句字幕需要保留足够的时间才能看完。':text==='閲読二。'?'第二句字幕已经到达，前一句也应该可以回看。':text==='検証失敗。'?'需要撤回的临时译文':text.startsWith('検証')?'译：'+text:'这是直播中文字幕。';
 const server=http.createServer(async(req,res)=>{
   if(req.url==='/v1/chat/completions'){
     let raw='';for await(const c of req)raw+=c;const input=JSON.parse(raw),blocks=JSON.parse(input.messages[1].content).blocks;requests.push(blocks);prompts.push(String(input.messages?.[0]?.content??''));if(translationDelay)await new Promise(r=>setTimeout(r,translationDelay));const segments=blocks.flatMap(b=>b.segments.map(s=>({id:s.id,text:translatedText(s.text)})));
@@ -124,11 +124,21 @@ try{
   await step('Interrupted websocket reconnects without retaining old audio buffers',async()=>{
     await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');const before=mock.stats.authorized,frames=mock.stats.frames;mock.disconnect();await until(()=>mock.stats.authorized>before);await until(async()=>mock.stats.frames>=frames+6&&(await rpc('speech:status')).lastTranslation==='大家好。');mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'reconnect',transcript:'接続を再開しました。'});await until(async()=> (await rpc('speech:status')).lastTranslation==='这是直播中文字幕。');await rpc('speech:stop');
   });
-  await step('Refresh stops audio and prevents old transcripts returning to a new document',async()=>{
-    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');await page.reload();await until(async()=> (await rpc('speech:status')).state==='stopped');assert.match((await rpc('speech:status')).message,/开始实时翻译/);assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
-    await popup.reload();await until(async()=>/开始实时翻译/.test(await popup.locator('#speech-state').textContent()??''));
+  await step('Refresh restores captions and recognition using the same capture and explicit session',async()=>{
+    await activate();await rpc('speech:start');await until(async()=> (await rpc('speech:status')).state==='active');
+    const before=await rpc('speech:status'),frames=mock.stats.frames;
+    await page.reload();await page.locator('#silent-audio').click();
+    await until(async()=>{const s=await rpc('speech:status');return s.state==='active'&&s.recognitionId!==before.recognitionId&&s.completed>before.completed&&mock.stats.frames>frames;});
+    assert.equal((await rpc('speech:status')).sessionId,before.sessionId);
+    assert.equal((await worker.evaluate(()=>chrome.tabCapture.getCapturedTabs()))[0].status,'active');
+    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,1);
+    await until(async()=>(await captionTexts()).includes('大家好。'));
+    // A late initial source on an empty SPA player is not a switch away from a playing video.
+    await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('emptied')));await new Promise(r=>setTimeout(r,300));assert.equal((await rpc('speech:status')).state,'active');
+    await rpc('speech:stop');await page.reload();await new Promise(r=>setTimeout(r,400));
+    assert.equal((await rpc('speech:status')).state,'stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
   });
-  await step('Live edge and buffer seeks keep capture, and a large rewind still stops',async()=>{
+  await step('Live edge and buffer seeks keep capture; a large rewind resyncs automatically',async()=>{
     await page.locator('#silent-audio').click();
     const inPage=(time,arm)=>worker.evaluate(async({tabId,time,arm})=>{
       await chrome.scripting.executeScript({target:{tabId},args:[time,arm],func:(time,arm)=>{
@@ -143,7 +153,7 @@ try{
           if(video.duration!==Infinity||video.currentTime!==time)throw new Error('live media mock was not applied');
           return;
         }
-        video.currentTime=time;video.dispatchEvent(new Event('seeking'));
+        video.currentTime=time;video.dispatchEvent(new Event('seeking'));video.dispatchEvent(new Event('seeked'));
       }});
     },{tabId,time,arm});
     await inPage(500,true);
@@ -155,16 +165,29 @@ try{
       assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,1);
     };
     await seek(560);await seek(548);await seek(548-15);
-    await inPage(500,false);await until(async()=>(await rpc('speech:status')).state==='stopped');
-    assert.match((await rpc('speech:status')).message,/拖动进度/);
-    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
+    const before=await rpc('speech:status');await inPage(500,false);
+    await until(async()=>{const s=await rpc('speech:status');return s.state==='active'&&s.recognitionId!==before.recognitionId;});
+    assert.equal((await rpc('speech:status')).sessionId,before.sessionId);
+    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,1);
+    await rpc('speech:stop');
     await page.evaluate(()=>{document.querySelector('video')?.remove();const video=document.createElement('video');video.style.cssText='width:720px;height:405px;background:#202438';document.body.prepend(video);});
   });
-  await step('Seeking or switching video stops audio and keeps a restart hint until the user starts again',async()=>{
+  await step('Repeated VOD seeks reset recognition once, discard old translations and preserve capture',async()=>{
     await page.locator('#silent-audio').click();await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active'&&await captionHas('字幕操作'));assert.ok(!(await captionTexts()).some(t=>t.includes('暂停滚动仍在采集和计费')));
-    await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('seeking')));await until(async()=>(await rpc('speech:status')).state==='stopped');
-    assert.match((await rpc('speech:status')).message,/拖动进度/);assert.match((await rpc('speech:status')).message,/开始实时翻译/);
-    await until(async()=>(await captionTexts()).some(t=>t.includes('开始实时翻译')));assert.equal(await page.locator('[data-si-owned=video]').count(),1);assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
+    const before=await rpc('speech:status'),connections=mock.stats.authorized;
+    translationDelay=1200;const requestCount=requests.length;
+    mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'pre-seek',transcript:'検証旧位置。'});
+    await until(()=>requests.length>requestCount);
+    await page.locator('video').evaluate(v=>{v.dispatchEvent(new Event('seeking'));v.dispatchEvent(new Event('seeked'));v.dispatchEvent(new Event('seeking'));});
+    await until(async()=>(await rpc('speech:status')).resumePending===true);
+    const pausedFrames=mock.stats.frames;await new Promise(r=>setTimeout(r,700));assert.equal(mock.stats.frames,pausedFrames);assert.equal(mock.stats.authorized,connections);
+    assert.equal((await worker.evaluate(()=>chrome.tabCapture.getCapturedTabs()))[0].status,'active');
+    translationDelay=0;await page.locator('video').evaluate(v=>v.dispatchEvent(new Event('seeked')));
+    await until(async()=>{const s=await rpc('speech:status');return s.state==='active'&&s.recognitionId!==before.recognitionId&&mock.stats.frames>pausedFrames;});
+    assert.equal(mock.stats.authorized,connections+1);assert.equal((await rpc('speech:status')).sessionId,before.sessionId);
+    await new Promise(r=>setTimeout(r,1500));assert.ok(!(await captionTexts()).some(t=>t.includes('旧位置')));
+  });
+  await step('Switching videos still stops explicitly; manual stop removes the overlay',async()=>{
     await rpc('speech:start');await until(async()=>(await rpc('speech:status')).state==='active');await page.locator('video').evaluate(v=>v.remove());
     await until(async()=>(await rpc('speech:status')).state==='stopped'&&/视频已切换/.test((await rpc('speech:status')).message));
     await until(async()=>(await captionTexts()).some(t=>t.includes('开始实时翻译')));assert.equal(await page.locator('[data-si-owned=video]').count(),1);
@@ -244,8 +267,20 @@ try{
     assert.ok((await captionTexts()).includes(translatedText('閲読一。')));assert.ok(!(await captionTexts()).includes(translatedText('閲読二。')));await captionClick('回到最新');await until(async()=>(await captionTexts()).includes(translatedText('閲読二。')));assert.ok((await captionTexts()).some(t=>t.startsWith('上一条：')));await captionClick('上一条译文');assert.ok((await captionTexts()).includes(translatedText('閲読一。')));await page.screenshot({path:'artifacts/live-reading-controls.png'});await captionClick('回到最新');
     const d=await rpc('speech:diagnostics');assert.ok(d.metrics.asrMs?.samples>0);assert.ok(d.metrics.displayWaitMs?.samples>0);assert.equal(await page.evaluate(()=>globalThis.pageClicks),0);
   });
+  await step('Balanced mode shows the next SSE before completion and follows the growing last page',async()=>{
+    await rpc('caption:save',{patch:{readingMode:'balanced'}});await rpc('cache:clear');
+    const done=(await rpc('speech:status')).completed;
+    mock.emitStreaming({sentence_id:40,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'長文表示。'});
+    await until(async()=>(await captionTexts()).some(t=>t.endsWith('末页新字')));
+    assert.equal((await rpc('speech:status')).completed,done);assert.ok(!streamTimings.at(-1).doneAt);
+    assert.ok((await captionTexts()).some(t=>t.startsWith('上一条：')));
+    await until(async()=>(await rpc('speech:status')).completed>done);
+    // Restore the predecessor expected by the subsequent withdrawal test.
+    mock.emitStreaming({sentence_id:41,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'閲読二。'});
+    await until(async()=>(await captionTexts()).includes(translatedText('閲読二。')));
+  });
   await step('A rejected streamed translation is withdrawn and the previous completed subtitle remains readable',async()=>{
-    await rpc('caption:save',{patch:{readingMode:'live'}});mock.emitStreaming({sentence_id:21,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証失敗。'});await until(async()=>(await captionTexts()).some(t=>t.includes('需要撤回')));await until(async()=>(await rpc('speech:status')).message.includes('文字翻译失败'));await until(async()=>!(await captionTexts()).some(t=>t.includes('需要撤回')));assert.ok((await captionTexts()).includes(translatedText('閲読二。')));assert.ok((await rpc('speech:diagnostics')).rows.some(r=>r.outcome==='failed'));
+    await rpc('caption:save',{patch:{readingMode:'live'}});mock.emitStreaming({sentence_id:42,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証失敗。'});await until(async()=>(await captionTexts()).some(t=>t.includes('需要撤回')));await until(async()=>(await rpc('speech:status')).message.includes('文字翻译失败'));await until(async()=>!(await captionTexts()).some(t=>t.includes('需要撤回')));assert.ok((await captionTexts()).includes(translatedText('閲読二。')));assert.ok((await rpc('speech:diagnostics')).rows.some(r=>r.outcome==='failed'));
   });
   await step('Worker restart withdraws an interrupted provisional caption and new streamed subtitles can still display',async()=>{
     mock.emitStreaming({sentence_id:24,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証中断。'});await until(async()=>(await captionTexts()).some(t=>t.includes('译：検証')));

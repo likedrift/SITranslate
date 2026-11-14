@@ -6,7 +6,7 @@ export function isLiveDuration(duration: number): boolean {
 }
 
 /**
- * VOD seeking always stops capture. On a live stream, forward jumps (back to
+ * VOD seeking resets recognition. On a live stream, forward jumps (back to
  * the live edge) and backward jitter within the tolerance keep the session.
  * A larger backward jump is the detectable user scrub away from the playhead.
  */
@@ -23,7 +23,7 @@ export class LiveSeekGuard {
     if (seeking || !Number.isFinite(time)) return;
     this.playhead = time;
   }
-  /** True when this seeking event should call interrupt('seek'). */
+  /** True when this seek needs a fresh recognition timeline, retaining capture. */
   onSeeking(duration: number, time: number): boolean {
     const interrupt = shouldInterruptSeek(duration, this.playhead, time);
     if (Number.isFinite(time)) this.playhead = time;

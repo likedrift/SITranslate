@@ -1,4 +1,4 @@
-export interface LiveCaption {id:string;version:string;source:string;text:string;final:boolean;traceId?:string;sourceEndAt?:number;arrivedAt:number}
+export interface LiveCaption {id:string;version:string;source:string;text:string;final:boolean;streamed?:boolean;traceId?:string;sourceEndAt?:number;arrivedAt:number}
 export const readingMs=(text:string)=>Math.min(6000,Math.max(1500,900+Array.from(text).length*90));
 // Bounded reading buffer; no audio, DOM or timers. The page owns its existing refresh timer.
 export class LiveReader {
@@ -9,7 +9,7 @@ export class LiveReader {
   get pending(){const i=this.items.findIndex(c=>c.id===this.currentId);return this.items.slice(i+1).length;}
   reset(){this.items=[];this.confirmed.clear();this.currentId='';this.paused=false;this.shownAt=0;this.finalAt=0;this.dropped=[];}
   receive(cue:LiveCaption,now:number,mode='balanced'){
-    const old=this.items.find(c=>c.id===cue.id);if(old){if(old.version===cue.version&&old.final&&!cue.final)return;const wasFinal=old.final,arrivedAt=old.version===cue.version?old.arrivedAt:cue.arrivedAt;Object.assign(old,cue,{arrivedAt});if(cue.id===this.currentId&&cue.final&&!wasFinal)this.finalAt=now;}
+    const old=this.items.find(c=>c.id===cue.id);cue={...cue,streamed:!cue.final||old?.version===cue.version&&old.streamed===true};if(old){if(old.version===cue.version&&old.final&&!cue.final)return;const wasFinal=old.final,arrivedAt=old.version===cue.version?old.arrivedAt:cue.arrivedAt;Object.assign(old,cue,{arrivedAt});if(cue.id===this.currentId&&cue.final&&!wasFinal)this.finalAt=now;}
     else this.items.push(cue);
     if(cue.final)this.confirmed.set(cue.id,{...cue});
     if(!this.currentId)this.show(cue,now);
@@ -23,7 +23,9 @@ export class LiveReader {
     const i=this.items.findIndex(c=>c.id===current.id);
     while(this.pending>1&&now-this.items[i+1].arrivedAt>4000)this.dropped.push(...this.items.splice(i+1,1));
     const next=this.items[i+1];if(!next)return;
-    const deadline=Math.min(Math.max(this.shownAt+readingMs(current.text),this.finalAt+800),next.arrivedAt+2500);
+    // Preserve reading time for complete cues, but expose a real stream promptly.
+    // The prior completed cue remains visible above the current one.
+    const deadline=Math.min(Math.max(this.shownAt+readingMs(current.text),this.finalAt+800),next.arrivedAt+(next.streamed?200:2500));
     if(mode!=='live'&&now<deadline)return;this.show(next,now);
   }
   private show(cue:LiveCaption,now:number){this.currentId=cue.id;this.shownAt=now;this.finalAt=cue.final?now:0;}

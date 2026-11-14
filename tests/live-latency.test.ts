@@ -15,6 +15,16 @@ const cue=(id:string,text=id,final=true,at=0):LiveCaption=>({id,version:id,sourc
 test('Reading buffer gives the current caption time, then retains its completed predecessor',()=>{
   const r=new LiveReader();r.receive(cue('one','第一句字幕。'),0);r.receive(cue('two','第二句字幕。'),100);assert.equal(r.current?.id,'one');r.tick(1499);assert.equal(r.current?.id,'one');r.tick(readingMs('第一句字幕。'));assert.equal(r.current?.id,'two');assert.equal(r.previous?.id,'one');
 });
+test('Balanced mode exposes the next real stream within 200 ms and still honors paused review',()=>{
+  const r=new LiveReader();r.receive(cue('old','长'.repeat(80)),0);
+  r.receive(cue('next','开',false,100),100);r.tick(299);assert.equal(r.current?.id,'old');
+  r.tick(300);assert.equal(r.current?.text,'开');assert.equal(r.previous?.id,'old');
+  r.receive(cue('next','开始流式翻译',false,350),350);assert.equal(r.current?.text,'开始流式翻译');
+  r.receive(cue('next','开始流式翻译。',true,400),400);r.paused=true;
+  r.receive(cue('third','新',false,500),500);r.tick(5000);assert.equal(r.current?.id,'next');
+  const fast=new LiveReader();fast.receive(cue('old','长'.repeat(80)),0);fast.receive(cue('new','新',false,100),100);
+  fast.receive(cue('new','新的完整译文',true,150),150);fast.tick(300);assert.equal(fast.current?.id,'new');
+});
 test('Stream updates extend one caption, final text gets a reading grace, and explicit live mode has no buffer delay',()=>{
   const r=new LiveReader();r.receive(cue('one','半',false,0),0);r.receive(cue('one','半句话',false,100),100);assert.equal(r.items.length,1);assert.equal(r.current?.arrivedAt,0);r.receive(cue('one','完整的一句话',true,700),700);r.receive(cue('two'),800);r.tick(1000);assert.equal(r.current?.id,'one');r.tick(1500);assert.equal(r.current?.id,'two');r.receive(cue('three'),1600,'live');assert.equal(r.current?.id,'three');
 });
