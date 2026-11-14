@@ -43,6 +43,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     lastPersistAt=Date.now();
     const snapshot={speechState:{...state},speechDiagnostics:{rows:diagnostics.rows.map(r=>({...r})),counters:{...counters}},...(config?{speechConfig:{...config}}:{})};
     writes=writes.catch(()=>{}).then(()=>chrome.storage.session.set(snapshot));
+    if(force&&state.tabId>=0)void chrome.tabs.sendMessage(state.tabId,{type:'player:refresh'},{frameId:0}).catch(()=>{});
     return writes;
   };
   const serial=<T>(fn:()=>Promise<T>):Promise<T>=>{const next=lock.catch(()=>{}).then(fn);lock=next;return next;};
@@ -122,11 +123,11 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     }
     finally{clearTimeout(timeout);if(run===epoch){inflight=undefined;busy=false;void pump();}}
   }
-  async function start(test=false){
+  async function start(test=false,targetTabId?:number){
     await stop();const saved=await chrome.storage.local.get('speechSettings');const settings=normalizeSpeech(saved.speechSettings??DEFAULT_SPEECH);
     if(!settings.apiKey.trim())throw new Error('请先在设置的「实时语音」中填写百炼 API Key。');
     config=await deps.config();if(!test&&!config.ready)throw new Error('请先配置文字翻译模型。');
-    const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(!test&&(tab?.id===undefined||!/^https?:\/\//.test(tab.url??'')))throw new Error('请在直播网页打开工具栏，再点击开始。');
+    const tab=targetTabId===undefined?(await chrome.tabs.query({active:true,currentWindow:true}))[0]:await chrome.tabs.get(targetTabId);if(!test&&(tab?.id===undefined||!/^https?:\/\//.test(tab.url??'')))throw new Error('请在要翻译的视频网页中开始。');
     testing=test;state={...IDLE_SPEECH,state:'connecting',sessionId:crypto.randomUUID(),recognitionId:crypto.randomUUID(),pageUrl:test?undefined:tab.url,tabId:test?-1:tab.id!,message:test?'正在测试语音连接…':'正在连接语音服务…'};context='';shownOrder=-1;await persist(true);
     try{
       if(!test)await attachCaption();
@@ -136,7 +137,10 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       await command({action:'start',sessionId:state.sessionId,recognitionId:state.recognitionId,settings:{...settings,apiKey:''},streamId,testing:test});
       if(!test){await chrome.action.setBadgeBackgroundColor({color:'#b43543'});await chrome.action.setBadgeText({tabId:tab.id!,text:'音'});}
       return {...state};
-    }catch{await stop('无法启动实时翻译，请重新加载扩展、刷新直播页并检查语音配置和浏览器权限。',true);return {...state};}
+    }catch(error){
+      state.needsActivation=/not been invoked|activeTab|not been granted/i.test(error instanceof Error?error.message:String(error));
+      await stop(state.needsActivation?'当前标签页尚未授权音频采集。请按实时语音快捷键，或点击浏览器工具栏中的思译后开始。':'无法启动实时翻译，请重新加载扩展、刷新直播页并检查语音配置和浏览器权限。',true);return {...state};
+    }
   }
   async function route(m:any,sender:chrome.runtime.MessageSender){
     if(sender.id!==chrome.runtime.id)throw new Error('无效扩展来源。');
@@ -198,5 +202,14 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     });}).catch(()=>{});
   });
   const footprint=()=>({diagnostics:diagnostics.rows.length,sourceMeta:sourceMeta.size,latest:latest.size,translatedPieces:translatedPieces.size,finalItems:finalItems.size,utterances:utterances.size,utteranceEmitted:utterances.emittedCount,queue:queue.length,contextChars:context.length});
-  return {route,footprint};
+  async function statusForTab(tabId:number){await loaded;const own=state.tabId===tabId;return {state:own?state.state:'idle',message:own?state.message:IDLE_SPEECH.message,needsActivation:own&&state.needsActivation===true};}
+  async function controlTab(tabId:number,action:'start'|'stop'|'toggle'){
+    await loaded;return serial(async()=>{
+      // A page control must never stop or expose another tab's audio session.
+      if(running()&&state.tabId!==tabId)throw new Error('其他标签页正在实时翻译，请先在该标签页停止。');
+      if(action==='stop'||(action==='toggle'&&running())){if(state.tabId===tabId)await stop();return;}
+      if(!running())await start(false,tabId);
+    });
+  }
+  return {route,footprint,statusForTab,controlTab};
 }

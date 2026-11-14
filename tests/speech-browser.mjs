@@ -314,6 +314,27 @@ try{
     const exported=JSON.parse(raw);assert.equal(typeof exported.outcomes?.completed,'number');assert.equal(exported.settings?.language,'ja');assert.equal(exported.settings?.textStream,true);assert.equal(exported.settings?.readingMode,'live');assert.equal(exported.settings?.terms,true);assert.equal(exported.policy?.skipAfterMs,12000);assert.equal(exported.policy?.silenceDurationMs,600);
     await activate();await page.bringToFront();mock.emitStreaming({sentence_id:23,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'検証停止。'});await until(async()=>(await captionTexts()).some(t=>t.includes('译：検')));await rpc('speech:stop');await new Promise(r=>setTimeout(r,1300));assert.equal(await page.locator('[data-si-owned=video]').count(),0);assert.ok(streamTimings.some(t=>t.cancelled));await rpc('speech:diagnostics-clear');assert.equal((await rpc('speech:diagnostics')).samples,0);
   });
+  await step('YouTube controls start/stop authorized audio, restore state on reload and cannot control another tab',async()=>{
+    // This suite supplies an invocation grant via the isolated allowlist. browser.mjs separately tests the ungranted path.
+    const html='<!doctype html><html><head><meta charset="utf-8"></head><body><div id="movie_player" style="width:720px"><video style="width:720px;height:405px;background:#202438"></video><div class="ytp-right-controls" style="height:48px;text-align:right;background:#202438"></div></div></body></html>';
+    await context.route('https://www.youtube.com/watch*',route=>route.fulfill({contentType:'text/html',body:html}));
+    await page.goto('https://www.youtube.com/watch?v=speech-controls');await activate();
+    const controls=page.locator('#si-player-controls'),toggle=controls.locator('#toggle'),button=controls.locator('#speech');
+    await toggle.click();await until(async()=>await button.isEnabled());const before=mock.stats.authorized;assert.equal((await rpc('speech:status')).state,'stopped');
+    await button.click();await until(async()=> (await rpc('speech:status')).state==='active');assert.ok(mock.stats.authorized>before);assert.equal(await button.textContent(),'停止实时语音翻译');
+    const session=(await rpc('speech:status')).sessionId;
+    // No page message may borrow the sender's permissions to act on the tabId in its payload.
+    const other=await context.newPage();await other.goto('https://www.youtube.com/watch?v=other');
+    const otherId=await worker.evaluate(async()=> (await chrome.tabs.query({url:'https://www.youtube.com/watch?v=other'}))[0].id);
+    const response=await worker.evaluate(async({otherId,tabId})=>(await chrome.scripting.executeScript({target:{tabId:otherId},func:tabId=>chrome.runtime.sendMessage({type:'player:action',mode:'speech',action:'stop',tabId}),args:[tabId]}))[0].result,{otherId,tabId});
+    assert.equal(response.ok,false);assert.match(response.error,/其他标签页/);assert.equal((await rpc('speech:status')).sessionId,session);await other.close();
+    await activate();await page.reload();await until(async()=> (await rpc('speech:status')).state==='active'&&await toggle.getAttribute('data-active')==='true');
+    assert.equal((await rpc('speech:status')).sessionId,session);await toggle.click();await until(async()=>await button.textContent()==='停止实时语音翻译');
+    await button.click();await until(async()=>(await rpc('speech:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
+    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
+    await rpc('speech:start');await until(async()=>await toggle.getAttribute('data-active')==='true');await rpc('speech:stop');await until(async()=>await toggle.getAttribute('data-active')==='false');
+    await context.unroute('https://www.youtube.com/watch*');
+  });
   assert.equal(mock.stats.nonzero,false);assert.deepEqual(errors,[]);await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,audioVerification:'muted real tabCapture with silent PCM; nonzero processing separately verified in OfflineAudioContext without an output device',metrics:{frames:mock.stats.frames,audioBytes:mock.stats.audioBytes,nonzero:mock.stats.nonzero}},null,2));
 }catch(error){await writeFile('artifacts/speech-tests.json',JSON.stringify({passed:results.length,tests:results,error:error.stack,state:await rpc('speech:status'),metrics:mock.stats,errors},null,2));throw error;}
 finally{await context.close();mock.close();await new Promise(resolve=>server.close(resolve));}

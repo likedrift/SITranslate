@@ -22,6 +22,14 @@ function activeSession(){
 }
 
 describe('live translation session',{concurrency:1},()=>{
+  test('player status exposes only its own state and never another tab transcript or session identifiers',async()=>{
+    const captions:unknown[]=[];installChrome(activeSession(),speechLocal(),captions);
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate:async()=>{throw new Error('must not translate');},cancel(){}});
+    assert.deepEqual(await speech.statusForTab(7),{state:'active',message:'正在识别并翻译标签页声音。',needsActivation:false});
+    assert.deepEqual(await speech.statusForTab(8),{state:'idle',message:IDLE_SPEECH.message,needsActivation:false});
+    for(const action of ['start','stop','toggle'] as const)await assert.rejects(speech.controlTab(8,action),/其他标签页/);
+    await speech.controlTab(7,'start');assert.equal((await speech.route({type:'speech:status'},ui) as typeof IDLE_SPEECH).sessionId,'sess');
+  });
   test('a completed timed prefix is never retranslated or merged into its later suffix',async()=>{
     const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
     installChrome(activeSession(),speechLocal(),captions);const clock=installClock(1_700_000_000_000),hold=deferred();

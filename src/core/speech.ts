@@ -1,7 +1,7 @@
 export type VadSilenceMs=400|600|800;
 export interface SpeechSettings {endpoint:string;apiKey:string;model:string;language:'ja'|'en'|'zh'|'auto';context:string;silenceDurationMs:VadSilenceMs}
 export interface SpeechUsage {inputTokens:number;outputTokens:number;totalTokens:number}
-export interface SpeechStatus {state:'idle'|'connecting'|'active'|'stopped'|'error';sessionId:string;recognitionId?:string;pageUrl?:string;resumePending?:boolean;tabId:number;message:string;seconds:number;sentBytes:number;hasAudio:boolean;completed:number;lastSource:string;lastTranslation:string;asrUsage?:SpeechUsage;sourceTime?:{beginMs:number;endMs?:number};timing?:{queueMs:number;translationMs:number;textToCaptionMs:number}}
+export interface SpeechStatus {state:'idle'|'connecting'|'active'|'stopped'|'error';sessionId:string;recognitionId?:string;pageUrl?:string;resumePending?:boolean;needsActivation?:boolean;tabId:number;message:string;seconds:number;sentBytes:number;hasAudio:boolean;completed:number;lastSource:string;lastTranslation:string;asrUsage?:SpeechUsage;sourceTime?:{beginMs:number;endMs?:number};timing?:{queueMs:number;translationMs:number;textToCaptionMs:number}}
 export const STREAMING_MODEL='qwen-audio-3.1-asr-flash-streaming';
 export const isStreaming=(model:string)=>model===STREAMING_MODEL;
 export const VAD_SILENCE_MS=[400,600,800] as const;

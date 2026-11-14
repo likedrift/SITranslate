@@ -427,6 +427,50 @@ try{
     await page.evaluate(()=>history.pushState({},'','/watch?v=another'));await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
     await context.unroute('https://www.youtube.com/watch*');
   });
+  await step('YouTube player controls mount without selection access or requests, remount once, and sync subtitle start/stop',async()=>{
+    const origins=await rpc('selection:origins');await rpc('selection:save',{origins:[]});
+    const html=videoFixture.replace('src="/silence.wav"',`src="${origin}/silence.wav"`).replace(/<track[^>]*>/,'');
+    await context.route('https://www.youtube.com/watch*',route=>route.fulfill({contentType:'text/html',body:html}));
+    const before=requests.length;await page.goto('https://www.youtube.com/watch?v=controls');await activate();
+    const controls=page.locator('#si-player-controls'),toggle=controls.locator('#toggle'),captions=controls.locator('#captions');
+    await until(async()=>await controls.count()===1);assert.equal(requests.length,before);
+    assert.equal(await controls.evaluate(el=>el.parentElement.className),'ytp-right-controls');
+    await page.evaluate(()=>{window.playerClicks=0;document.querySelector('#movie_player').addEventListener('click',()=>window.playerClicks++);});
+    await toggle.click();await until(async()=>await captions.isEnabled());
+    // Synthetic site clicks must not start translation. The following keyboard press is a real user gesture.
+    await captions.evaluate(el=>el.click());assert.equal((await rpc('video:status')).state,'idle');
+    await captions.focus();await page.keyboard.press('Enter');await until(async()=>await captions.textContent()==='停止网站字幕翻译');
+    assert.equal(await page.evaluate(()=>window.playerClicks),0);
+    await page.locator('.ytp-caption-segment').evaluate(el=>el.textContent='Hello world.');await until(async()=>(await captionText()).includes('你好，世界。'));
+    assert.ok(await controls.locator('#panel').evaluate(el=>el.matches(':popover-open')));
+    await page.screenshot({path:'artifacts/player-controls.png'});
+    await captions.click();await until(async()=>await captions.textContent()==='开始网站字幕翻译');
+    await videoAct('start');await until(async()=>await captions.textContent()==='停止网站字幕翻译');
+    await page.keyboard.press('Escape');assert.equal(await toggle.getAttribute('aria-expanded'),'false');
+    await videoAct('stop');await until(async()=>await toggle.getAttribute('data-active')==='false');
+    await page.locator('.ytp-right-controls').evaluate(el=>{const next=document.createElement('div');next.className=el.className;next.append(...[...el.children].filter(c=>!c.hasAttribute('data-si-owned')));el.replaceWith(next);});
+    await until(async()=>await controls.count()===1);assert.equal(await page.locator('.ytp-subtitles-button').count(),1);
+    const after=requests.length;await page.reload();await until(async()=>await controls.count()===1);assert.equal(requests.length,after);
+    await toggle.click();await until(async()=>await captions.isEnabled());assert.equal(await captions.textContent(),'开始网站字幕翻译');
+    await page.locator('#fullscreen').click();await until(async()=>await page.evaluate(()=>!!document.fullscreenElement));
+    assert.ok(await toggle.isVisible());await toggle.click();assert.ok(await captions.isVisible());
+    await page.evaluate(()=>document.exitFullscreen());await until(async()=>await page.evaluate(()=>!document.fullscreenElement));
+    await rpc('selection:save',{origins});
+  });
+  await step('A fresh page audio request reports the real Chrome invocation restriction without a capture allowlist',async()=>{
+    const settings=await rpc('speech:settings-get');await rpc('speech:settings-save',{settings:{...settings,apiKey:'test-activation-key'}});
+    const controls=page.locator('#si-player-controls'),toggle=controls.locator('#toggle');
+    if(await toggle.getAttribute('aria-expanded')!=='true')await toggle.click();
+    await controls.locator('#speech').click();await until(async()=> (await rpc('speech:status')).state==='error');
+    assert.equal((await rpc('speech:status')).needsActivation,true);
+    const commands=await worker.evaluate(()=>chrome.commands.getAll()),shortcut=commands.find(c=>c.name==='toggle-speech').shortcut;
+    await until(async()=>{const text=await controls.locator('#feedback').textContent();return shortcut?text.includes(shortcut):text.includes('先设置');});
+    assert.match(await controls.locator('#feedback').textContent(),/授权/);
+    assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
+    assert.equal(await controls.locator('#speech').isEnabled(),true);
+    const manifest=await worker.evaluate(()=>chrome.runtime.getManifest());assert.equal(manifest.commands['translate-page'].suggested_key.default,'Alt+Shift+T');assert.equal(manifest.commands['toggle-speech'].suggested_key.default,'Alt+Shift+Y');
+    await rpc('speech:settings-save',{settings});await context.unroute('https://www.youtube.com/watch*');
+  });
   await step('Empty page-status replies stay idle and the popup does not crash',async()=>{
     await worker.evaluate(()=>chrome.scripting.unregisterContentScripts({ids:['selection-listener']}).catch(()=>{}));
     const bare=await context.newPage();

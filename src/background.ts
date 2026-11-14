@@ -5,6 +5,7 @@ import {adapterFor,retryDelayMs} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
 import {SharedWork} from './core/shared';
 import {createSpeechController} from './speech-background';
+import {isYouTubePage,type PlayerState} from './core/player';
 import {DEFAULT_CAPTION,captionGeometryPatch,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
 import {streamSegment} from './core/stream-text';
 import {isLiveSubtitle} from './core/live-translate';
@@ -155,9 +156,37 @@ async function selectionState(url:string){
   const configured=origins.some(origin=>origin===pattern||origin===`${parsed.protocol}//*/*`);
   return {enabled:configured&&await chrome.permissions.contains({origins:[pattern]}),supported:true};
 }
+async function playerStatus(tabId:number):Promise<PlayerState>{
+  const [voice,video,commands]=await Promise.all([
+    speech.statusForTab(tabId),
+    chrome.tabs.sendMessage(tabId,{type:'video:player-status'},{frameId:0}).catch(()=>undefined),
+    chrome.commands.getAll()
+  ]);
+  return {speech:voice,captions:video&&typeof video.state==='string'&&typeof video.message==='string'?{state:video.state,message:video.message}:{state:'idle',message:''},shortcut:commands.find(c=>c.name==='toggle-speech')?.shortcut??''};
+}
 async function route(message:any,sender:chrome.runtime.MessageSender){
   await initialized;if(!message||typeof message.type!=='string')throw new Error('无效消息。');
   if(message.type.startsWith('speech:'))return speech.route(message,sender);
+  if(message.type.startsWith('player:')){
+    if(!pageSender(sender)||sender.frameId!==0||!isYouTubePage(sender.url??''))throw new Error('播放器操作只允许来自当前 YouTube 页面。');
+    const tabId=sender.tab!.id!;
+    if(message.type==='player:status')return playerStatus(tabId);
+    if(message.type==='player:changed'){void chrome.tabs.sendMessage(tabId,{type:'player:refresh'},{frameId:0}).catch(()=>{});return;}
+    if(message.type==='player:settings')return chrome.runtime.openOptionsPage();
+    if(message.type==='player:shortcuts'){await chrome.tabs.create({url:'chrome://extensions/shortcuts'});return;}
+    if(message.type!=='player:action'||!['speech','captions'].includes(message.mode)||!['start','stop'].includes(message.action))throw new Error('不支持的播放器操作。');
+    if(message.mode==='speech')await speech.controlTab(tabId,message.action);
+    else{
+      const current=await speech.statusForTab(tabId);
+      if(message.action==='start'){
+        const config=await safeConfig();if(!config.ready)throw new Error('请先在翻译设置中配置 API Key 和模型。');
+        if(['active','connecting'].includes(current.state))await speech.controlTab(tabId,'stop');
+        await chrome.scripting.executeScript({target:{tabId},files:['video.js']});
+        await chrome.tabs.sendMessage(tabId,{type:'video:start',config},{frameId:0});
+      }else if(!['active','connecting'].includes(current.state))await chrome.tabs.sendMessage(tabId,{type:'video:stop'},{frameId:0}).catch(()=>{});
+    }
+    return playerStatus(tabId);
+  }
   const ui=trusted(sender);
   if(message.type==='caption:get'&&(ui||pageSender(sender)))return captionLayout();
   if(message.type==='caption:position'&&pageSender(sender)){
@@ -240,7 +269,17 @@ chrome.contextMenus.onClicked.addListener(async(info,tab)=>{
     catch{await chrome.action.setBadgeText({tabId:tab.id,text:'!'});await chrome.action.setTitle({tabId:tab.id,title:'此页面无法访问。请在普通网页中使用思译。'});}
   }
 });
-chrome.commands.onCommand.addListener(command=>tabAction(command==='restore-page'?'restore':'start').catch(async(error)=>{const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id){await chrome.action.setBadgeText({tabId:tab.id,text:'!'});await chrome.action.setTitle({tabId:tab.id,title:errorText(error)});}}));
+chrome.commands.onCommand.addListener((command,tab)=>{
+  const run=async()=>{
+    await initialized;
+    if(command==='toggle-speech'){
+      const target=tab?.id===undefined?await activeTab():tab;
+      await speech.controlTab(target.id!,'toggle');return;
+    }
+    if(command==='translate-page'||command==='restore-page')return tabAction(command==='restore-page'?'restore':'start');
+  };
+  void run().catch(async(error)=>{const target=tab?.id===undefined?(await chrome.tabs.query({active:true,currentWindow:true}))[0]:tab;if(target?.id){await chrome.action.setBadgeText({tabId:target.id,text:'!'});await chrome.action.setTitle({tabId:target.id,title:errorText(error)});void chrome.tabs.sendMessage(target.id,{type:'player:refresh'},{frameId:0}).catch(()=>{});}});
+});
 chrome.tabs.onRemoved.addListener(tabId=>{
   for(const job of jobs.values())if(job.tabId===tabId)job.controller.abort();
   for(const key of taskBudget.keys())if(key.startsWith(`${tabId}:`))taskBudget.delete(key);

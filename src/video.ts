@@ -28,6 +28,7 @@ function boot(){
   let drag:{x:number;y:number;pointerId:number;box:CaptionBox;area:CaptionBox;before:CaptionLayout;full:boolean;corner?:CaptionCorner;minHeight:number;moved:boolean}|undefined;
   const disposers:(()=>void)[]=[];
   async function rpc<T=unknown>(value:unknown):Promise<T>{const r=await chrome.runtime.sendMessage(value);if(!r?.ok)throw new Error(r?.error??'扩展连接中断。');return r.data;}
+  const notifyPlayer=()=>{void rpc({type:'player:changed'}).catch(()=>{});};
   function cancel(){if(task)void rpc({type:'task:cancel',taskId:task}).catch(()=>{});task=`subtitle-${crypto.randomUUID()}`;generation++;working=false;for(const e of entries.values())if(e.state==='running')e.state='pending';}
   function listen(target:EventTarget,event:string,fn:()=>void){target.addEventListener(event,fn);disposers.push(()=>target.removeEventListener(event,fn));}
   function stop(message='字幕翻译已停止。'){
@@ -39,6 +40,7 @@ function boot(){
     if(track&&originalMode&&track.mode==='hidden')track.mode=originalMode;
     host?.remove();host=undefined;original=undefined;translated=undefined;card=undefined;menu=undefined;menuToggle=undefined;menuOpen=false;pager=undefined;content=undefined;drag=undefined;pendingLayout=undefined;pageKey='';video=undefined;track=undefined;entries.clear();current=[];
     lastError='';status={...status,state:'stopped',message};
+    notifyPlayer();
   }
   function findVideo(){
     const videos=[...document.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>40&&r.height>30;});
@@ -248,6 +250,7 @@ function boot(){
     if(sender.id!==chrome.runtime.id||!m?.type?.startsWith('video:'))return;
     if(m.type==='video:layout'){layoutEpoch++;if(drag){pendingLayout=m.layout;if(m.layout.locked)finishGesture(true);}else{useLayout(m.layout);render();}respond(true);return;}
     if(m.type==='video:get-status'){status.bilingual=layout.showOriginal;respond(status);return;}
+    if(m.type==='video:player-status'){respond({state:liveSession?'stopped':status.state,message:liveSession?'':status.message});return;}
     if(m.type==='video:live-start'){
       const sessionId=String(m.sessionId??'');stop();liveSession=sessionId;recognitionId=m.recognitionId;liveShownAt=0;video=findVideo();const run=generation;
       void (async()=>{
@@ -298,7 +301,7 @@ function boot(){
     if(m.type==='video:stop'){stop();respond(status);return;}
     if(m.type==='video:display'){layoutEpoch++;const showOriginal=m.bilingual!==false;useLayout({...layout,showOriginal});if(pendingLayout)pendingLayout={...pendingLayout,showOriginal};render();respond(status);return;}
     if(m.type==='video:retry'){lastError='';for(const e of entries.values())if(e.state==='failed')e.state='pending';tick();respond(status);return;}
-    if(m.type==='video:start'){void start(m.config).then(()=>respond(status),error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';respond(status);});return true;}
+    if(m.type==='video:start'){void start(m.config).then(()=>{notifyPlayer();respond(status);},error=>{stop();status.state='error';status.message=error instanceof Error?error.message:'无法开启字幕翻译。';notifyPlayer();respond(status);});return true;}
   });
   // The background owns navigation: a same-page refresh preserves the existing capture.
   window.addEventListener('pagehide',()=>stop());
