@@ -8,6 +8,7 @@ import {performance} from 'node:perf_hooks';
 const root=process.cwd(),results=[],requests=[];
 let behavior='normal',delay=0;
 const fixture=await readFile('tests/fixtures/article.html','utf8');
+const selectionFixture=await readFile('tests/fixtures/selection.html','utf8');
 const videoFixture=await readFile('tests/fixtures/video.html','utf8');
 const silence=Buffer.alloc(44+120*8000*2);silence.write('RIFF');silence.writeUInt32LE(silence.length-8,4);silence.write('WAVEfmt ',8);silence.writeUInt32LE(16,16);silence.writeUInt16LE(1,20);silence.writeUInt16LE(1,22);silence.writeUInt32LE(8000,24);silence.writeUInt32LE(16000,28);silence.writeUInt16LE(2,32);silence.writeUInt16LE(16,34);silence.write('data',36);silence.writeUInt32LE(silence.length-44,40);
 const vtt='WEBVTT\n\n00:00.000 --> 00:05.000\nHello world.\n\n00:05.000 --> 00:10.000\nSecond subtitle.\n\n00:10.000 --> 00:15.000\nEnglish and 日本語 mixed.\n\n01:00.000 --> 01:05.000\nA late subtitle.\n';
@@ -29,7 +30,7 @@ const server=http.createServer(async(req,res)=>{
     }else{res.writeHead(200,{'Content-Type':'application/json'});res.end(JSON.stringify({choices:[{message:{content}}],usage:{prompt_tokens:100,completion_tokens:50}}));}
     return;
   }
-  res.setHeader('Content-Type','text/html; charset=utf-8');res.end(req.url?.startsWith('/video')?videoFixture:fixture);
+  res.setHeader('Content-Type','text/html; charset=utf-8');res.end(req.url?.startsWith('/video')?videoFixture:req.url?.startsWith('/selection')?selectionFixture:fixture);
 });
 await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));
 const origin=`http://127.0.0.1:${server.address().port}`;
@@ -37,7 +38,7 @@ await mkdir('artifacts',{recursive:true});
 // Load a copy of the production extension in an isolated profile; all fixtures and API calls stay on loopback.
 const testExtension=path.join(root,'artifacts','test-extension');await cp('dist',testExtension,{recursive:true});
 const context=await chromium.launchPersistentContext(path.join(root,'artifacts',`browser-profile-${Date.now()}`),{
-  channel:'chromium',headless:true,viewport:{width:1280,height:900},args:[`--disable-extensions-except=${testExtension}`,`--load-extension=${testExtension}`]
+  channel:'chromium',headless:true,viewport:{width:1280,height:900},args:['--mute-audio',`--disable-extensions-except=${testExtension}`,`--load-extension=${testExtension}`]
 });
 const browserErrors=[];context.on('page',page=>page.on('pageerror',error=>browserErrors.push(error.message)));
 let worker=context.serviceWorkers()[0]??await context.waitForEvent('serviceworker');const extensionId=new URL(worker.url()).host;
@@ -53,6 +54,33 @@ async function status(){return worker.evaluate(id=>chrome.tabs.sendMessage(id,{t
 async function until(predicate,timeout=12000){const start=performance.now();while(performance.now()-start<timeout){if(await predicate())return;await new Promise(resolve=>setTimeout(resolve,60));}throw new Error('Condition timed out');}
 async function complete(){await until(async()=>['watching','done'].includes((await status()).state));}
 async function step(name,fn){const start=performance.now();await fn();results.push({name,passed:true,ms:Math.round(performance.now()-start)});console.log(`PASS ${name}`);}
+async function dragSelection(selector,start=0,end,backward=false){
+  await page.keyboard.press('Escape');await page.locator(selector).scrollIntoViewIfNeeded();
+  const points=await page.locator(selector).evaluate((el,{start,end})=>{
+    // Start a fresh selection rather than initiating the browser's native drag of already-selected text.
+    getSelection().removeAllRanges();
+    const node=el.firstChild;end??=node.length;const range=document.createRange();
+    range.setStart(node,start);range.setEnd(node,start+1);const first=range.getBoundingClientRect();
+    range.setStart(node,end-1);range.setEnd(node,end);const last=range.getBoundingClientRect();
+    return {start:{x:first.left+.25,y:(first.top+first.bottom)/2},end:{x:last.right-.25,y:(last.top+last.bottom)/2}};
+  },{start,end});
+  const from=backward?points.end:points.start,to=backward?points.start:points.end;
+  await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:12});await page.mouse.up();
+  return {from,to};
+}
+async function assertSelectionPosition(selector,backward=false){
+  await until(async()=>await page.locator('[data-si-owned=panel]').count()===1);
+  const expected=await page.locator(selector).evaluate((el,backward)=>{
+    const root=el.getRootNode(),selection=root instanceof ShadowRoot?root.getSelection():getSelection();
+    const rects=[...selection.getRangeAt(0).getClientRects()].filter(r=>r.width>0&&r.height>0&&r.bottom>0&&r.top<innerHeight);
+    return (backward?rects[0]:rects.at(-1)).toJSON();
+  },backward);
+  await until(async()=>{
+    const box=await page.locator('[data-si-owned=panel]').boundingBox();
+    return box&&Math.abs(box.x-expected.right-8)<1&&Math.abs(box.y+box.height/2-(expected.top+expected.bottom)/2)<1;
+  });
+  return expected;
+}
 try{
   await step('Configure provider through the actual settings UI',async()=>{
     await until(async()=>await ui.locator('#stream').isChecked()&&await ui.locator('#dynamic').isChecked()&&await ui.locator('#cache-enabled').isChecked());
@@ -156,6 +184,57 @@ try{
     const cdp=await context.newCDPSession(page);await until(async()=>{const tree=await cdp.send('Accessibility.getFullAXTree');return tree.nodes.some(n=>n.name?.value==='这是选中的句子。');});await cdp.detach();
     await page.screenshot({path:'artifacts/selection-result.png'});await page.keyboard.press('Escape');assert.equal(await page.locator('[data-si-owned=panel]').count(),0);
   });
+  await step('Real mouse selection inside nested Shadow DOM anchors next to the comment and clicks translate only that text',async()=>{
+    await page.goto(`${origin}/selection`);await until(isInjected);const before=requests.length;
+    await dragSelection('#shadow-sentence',1,8);await assertSelectionPosition('#shadow-sentence');
+    const text=await page.evaluate(()=>getSelection().toString());assert.equal(text,'长得像打舞萌的');
+    await page.screenshot({path:'artifacts/selection-shadow-position.png'});assert.equal(requests.length,before);
+    const box=await page.locator('[data-si-owned=panel]').boundingBox();await page.mouse.click(box.x+18,box.y+18);
+    await until(()=>requests.length===before+1);assert.equal(requests.at(-1).blocks[0].segments[0].text,text);assert.equal(requests.at(-1).blocks[0].context,'');
+    await until(async()=>{const cdp=await context.newCDPSession(page);try{return (await cdp.send('Accessibility.getFullAXTree')).nodes.some(n=>n.name?.value==='译：'+text);}finally{await cdp.detach();}});
+    await page.keyboard.press('Escape');
+  });
+  await step('Closing a loading selection allows another selection and cancelled late results do not reopen it',async()=>{
+    const before=requests.length;delay=600;
+    try{
+      await dragSelection('#shadow-sentence',9,14);await assertSelectionPosition('#shadow-sentence');
+      const box=await page.locator('[data-si-owned=panel]').boundingBox();await page.mouse.click(box.x+18,box.y+18);await until(()=>requests.length===before+1);
+      await page.keyboard.press('Escape');assert.equal(await page.locator('[data-si-owned=panel]').count(),0);
+      await dragSelection('#light');await assertSelectionPosition('#light');
+      await new Promise(resolve=>setTimeout(resolve,700));await assertSelectionPosition('#light');assert.equal(requests.length,before+1);
+    }finally{delay=0;await page.keyboard.press('Escape');}
+  });
+  await step('Selection follows keyboard changes, multiline direction, scrolled page coordinates and viewport reflow without requests',async()=>{
+    const before=requests.length;
+    await dragSelection('#shadow-sentence',1,7);await assertSelectionPosition('#shadow-sentence');
+    await page.keyboard.press('Shift+ArrowRight');await assertSelectionPosition('#shadow-sentence');
+    await dragSelection('#shadow-multi');const last=await assertSelectionPosition('#shadow-multi');
+    await dragSelection('#shadow-multi',0,undefined,true);const first=await assertSelectionPosition('#shadow-multi',true);assert.ok(last.top>first.top+28);
+    await page.evaluate(()=>window.scrollTo(0,250));await dragSelection('#light');await assertSelectionPosition('#light');
+    await page.setViewportSize({width:500,height:900});await assertSelectionPosition('#light');
+    await page.setViewportSize({width:1280,height:900});await page.keyboard.press('Escape');assert.equal(requests.length,before);
+  });
+  await step('Legacy Chromium shadow selection, screen edges and nested scroll stay usable without sending text',async()=>{
+    const before=requests.length;
+    await worker.evaluate(id=>chrome.scripting.executeScript({target:{tabId:id},func:()=>{globalThis.__savedComposedRanges=Selection.prototype.getComposedRanges;Selection.prototype.getComposedRanges=undefined;}}),tabId);
+    try{await dragSelection('#shadow-sentence',1,8);await assertSelectionPosition('#shadow-sentence');}
+    finally{await worker.evaluate(id=>chrome.scripting.executeScript({target:{tabId:id},func:()=>{Selection.prototype.getComposedRanges=globalThis.__savedComposedRanges;delete globalThis.__savedComposedRanges;}}),tabId);}
+    await dragSelection('#edge');await until(async()=>await page.locator('[data-si-owned=panel]').count()===1);
+    const edge=await page.locator('#edge').boundingBox(),button=await page.locator('[data-si-owned=panel]').boundingBox(),viewport=page.viewportSize();
+    assert.ok(button.x+button.width<=edge.x-7);assert.ok(button.x>=12&&button.y>=12&&button.x+button.width<=viewport.width-12&&button.y+button.height<=viewport.height-12);
+    await dragSelection('#scroll-sentence');await assertSelectionPosition('#scroll-sentence');
+    await page.locator('#scroller').evaluate(el=>el.scrollTop=30);await until(async()=>await page.locator('[data-si-owned=panel]').count()===0);assert.equal(requests.length,before);
+  });
+  await step('Unavailable shadow geometry uses the current pointer, while editable shadow text and inputs stay excluded',async()=>{
+    const before=requests.length;await page.keyboard.press('Escape');await page.locator('#closed').scrollIntoViewIfNeeded();
+    const closed=await page.locator('#closed').boundingBox(),from={x:closed.x+18.25,y:closed.y+14},to={x:closed.x+125.75,y:closed.y+14};
+    await page.mouse.move(from.x,from.y);await page.mouse.down();await page.mouse.move(to.x,to.y,{steps:10});await page.mouse.up();
+    await until(async()=>await page.locator('[data-si-owned=panel]').count()===1);
+    const box=await page.locator('[data-si-owned=panel]').boundingBox();assert.ok(Math.abs(box.x-to.x-8)<1);assert.ok(Math.abs(box.y+box.height/2-to.y)<1);
+    await page.keyboard.press('Shift+ArrowRight');await until(async()=>await page.locator('[data-si-owned=panel]').count()===0);
+    await dragSelection('#shadow-editable');await new Promise(resolve=>setTimeout(resolve,200));assert.equal(await page.locator('[data-si-owned=panel]').count(),0);
+    await page.locator('#shadow-input').click({clickCount:3});await new Promise(resolve=>setTimeout(resolve,200));assert.equal(await page.locator('[data-si-owned=panel]').count(),0);assert.equal(requests.length,before);
+  });
   await step('Optional selection permission persists a lightweight listener for fresh pages',async()=>{
     await rpc('selection:save',{origins:['http://127.0.0.1/*']});
     await page.goto(`${origin}/article?fresh`);await until(isInjected);
@@ -207,11 +286,12 @@ try{
     assert.ok(result[0].result==='denied'||!result[0].result.settings);
   });
   await step('Background suspension preserves settings and cache without requiring a permanently alive worker',async()=>{
-    const session=await context.newCDPSession(ui),versions=new Map();
-    session.on('ServiceWorker.workerVersionUpdated',event=>{for(const v of event.versions)versions.set(v.versionId,v);});await session.send('ServiceWorker.enable');
+    const session=await context.newCDPSession(ui),versions=new Map(),stopped=new Set();
+    session.on('ServiceWorker.workerVersionUpdated',event=>{for(const v of event.versions){versions.set(v.versionId,v);if(v.runningStatus==='stopped')stopped.add(v.versionId);}});await session.send('ServiceWorker.enable');
     await until(()=>[...versions.values()].some(v=>v.scriptURL===worker.url()));const version=[...versions.values()].find(v=>v.scriptURL===worker.url());
     const backgroundUrl=worker.url();await worker.evaluate(()=>chrome.storage.session.set({jobHistory:{'forced-interruption':{state:'running',time:Date.now()}}}));
-    await session.send('ServiceWorker.stopWorker',{versionId:version.versionId});await until(()=>versions.get(version.versionId).runningStatus==='stopped');
+    // A UI poll may restart the worker before the next sampling tick; retain the actual stopped event.
+    stopped.delete(version.versionId);await session.send('ServiceWorker.stopWorker',{versionId:version.versionId});await until(()=>stopped.has(version.versionId));
     const config=await rpc('settings:get');await until(()=>versions.get(version.versionId).runningStatus==='running');worker=context.serviceWorkers().find(w=>w.url()===backgroundUrl)??worker;assert.equal(config.profiles[0].model,'mock-translator');
     const metadata=await worker.evaluate(()=>chrome.storage.session.get('jobHistory'));assert.equal(metadata.jobHistory['forced-interruption'].state,'interrupted');
     const before=requests.length;await act('start');await complete();assert.equal(requests.length,before);await act('restore');await session.detach();

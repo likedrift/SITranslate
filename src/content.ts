@@ -18,6 +18,7 @@ function boot(){
   let observedShadows=new WeakSet<ShadowRoot>();
   const observeOptions:MutationObserverInit={childList:true,characterData:true,subtree:true,attributes:true,attributeFilter:['hidden','open','aria-hidden','class','style','translate']};
   let panelHost:HTMLElement|undefined,panelRoot:ShadowRoot|undefined,selectionText='',selectionContext='',selectionTask='',selectionRequest='',selectionAnchor:DOMRect|undefined;
+  let selectionRange:Range|undefined,selectionRoots:ShadowRoot[]=[],selectionPoint:{x:number;y:number}|undefined,selectionBackward=false;
   let selectionTimer:ReturnType<typeof setTimeout>|undefined,selectionPhase:'button'|'loading'|'result'='button';
   let selectionEnabled=false;
   async function refreshSelection(){try{const state=await message<{enabled:boolean}>({type:'selection:state'});selectionEnabled=state.enabled;if(!selectionEnabled)closePanel();}catch{selectionEnabled=false;}}
@@ -212,15 +213,24 @@ function boot(){
     @media(prefers-color-scheme:dark){:host{color:#e9ebf6}.card{background:#202332;border-color:#41465d}.hint,header{color:#b1b7ce}button{background:#343d67;color:#d5dcff}button:hover{background:#44517d}.error{color:#ffb4b7}}`;
   function positionPanel(){
     if(!panelHost||!selectionAnchor)return;
+    if(selectionRange){const rect=selectionRect(selectionRange);if(rect)selectionAnchor=rect;else if(selectionPhase==='button'){closePanel();return;}}
     const width=selectionPhase==='button'?36:Math.min(360,innerWidth-24);
     const height=panelHost.getBoundingClientRect().height||36;
-    const x=Math.max(12,Math.min(innerWidth-width-12,selectionAnchor.left));
-    let y=selectionAnchor.bottom+8;if(y+height>innerHeight-12)y=Math.max(12,selectionAnchor.top-height-8);
-    panelHost.style.left=`${x}px`;panelHost.style.top=`${y}px`;
+    let x=selectionAnchor.left,y=selectionAnchor.bottom+8;
+    if(selectionPhase==='button'){
+      x=selectionAnchor.right+8;y=selectionAnchor.top+(selectionAnchor.height-height)/2;
+      if(x+width>innerWidth-12){
+        if(selectionAnchor.left-width-8>=12)x=selectionAnchor.left-width-8;
+        else {x=selectionAnchor.right-width;y=selectionAnchor.bottom+8;}
+      }
+    }
+    if(y+height>innerHeight-12)y=selectionAnchor.top-height-8;
+    panelHost.style.left=`${Math.max(12,Math.min(innerWidth-width-12,x))}px`;
+    panelHost.style.top=`${Math.max(12,Math.min(innerHeight-height-12,y))}px`;
   }
   function closePanel(){
     if(selectionTask)message({type:'task:cancel',taskId:selectionTask}).catch(()=>{});
-    selectionTask='';selectionRequest='';panelHost?.remove();panelHost=undefined;panelRoot=undefined;
+    selectionTask='';selectionRequest='';selectionPhase='button';panelHost?.remove();panelHost=undefined;panelRoot=undefined;
   }
   function createPanel(){
     panelHost?.remove();panelHost=document.createElement('div');panelHost.dataset.siOwned='panel';
@@ -266,27 +276,66 @@ function boot(){
     }catch(error){if(selectionTask===localTask){selectionPhase='result';showResult(error instanceof Error?error.message:'翻译失败，请重试。',true);}}
     finally{if(heartbeat)clearInterval(heartbeat);}
   }
+  function selectionRect(range:Range){
+    const rects=[...range.getClientRects()].filter(rect=>rect.width>0&&rect.height>0&&rect.bottom>0&&rect.top<innerHeight&&rect.right>0&&rect.left<innerWidth);
+    return selectionBackward?rects[0]:rects.at(-1);
+  }
+  function readSelectionRange(selection:Selection){
+    // Discover only roots on the interaction/selection path, never scan the page for shadow trees.
+    for(const node of [selection.anchorNode,selection.focusNode]){
+      let root=node?.getRootNode();while(root instanceof ShadowRoot&&root.mode==='open'){if(!selectionRoots.includes(root))selectionRoots.push(root);root=root.host.getRootNode();}
+    }
+    if(typeof selection.getComposedRanges==='function'){
+      try{
+        const composed=selection.getComposedRanges({shadowRoots:selectionRoots})[0];
+        if(composed&&composed.startContainer.getRootNode()===composed.endContainer.getRootNode()){
+          const range=document.createRange();range.setStart(composed.startContainer,composed.startOffset);range.setEnd(composed.endContainer,composed.endOffset);
+          if(!range.collapsed&&range.toString().trim())return range;
+        }
+      }catch{/* Older implementations may not support the options form. */}
+    }
+    // Chromium before getComposedRanges exposes the actual range through the open root.
+    for(const root of selectionRoots){
+      const local=(root as ShadowRoot&{getSelection?:()=>Selection|null}).getSelection?.();
+      if(local?.rangeCount){const range=local.getRangeAt(0);if(!range.collapsed&&range.toString().trim()){
+        selectionBackward=local.direction==='backward'||(local.focusNode===range.startContainer&&local.focusOffset===range.startOffset);return range.cloneRange();
+      }}
+    }
+    if(selection.rangeCount){const range=selection.getRangeAt(0);if(!range.collapsed&&range.toString().trim())return range.cloneRange();}
+  }
+  function rememberSelection(event:Event){
+    const roots=event.composedPath().filter((target):target is ShadowRoot=>target instanceof ShadowRoot&&target.mode==='open');
+    if(event instanceof PointerEvent){selectionRoots=roots;selectionPoint=event.clientX||event.clientY?{x:event.clientX,y:event.clientY}:undefined;}
+    else {if(roots.length)selectionRoots=roots;selectionPoint=undefined;}
+  }
   function detectSelection(){
     if(!selectionEnabled)return;
     if(selectionPhase==='loading')return;
     const selection=getSelection(),text=selection?.toString().trim()??'';
-    const element=selection?.anchorNode?.parentElement;
-    if(!text||!selection?.rangeCount||!element||isBlocked(element,selectionBlocked)||document.activeElement?.closest(selectionBlocked)){if(selectionPhase==='button')closePanel();return;}
-    selectionText=text;selectionContext=(element.closest(blockSelector)??element).textContent?.slice(0,2500)??'';
-    selectionAnchor=selection.getRangeAt(0).getBoundingClientRect();trigger();
+    if(!text||!selection){if(selectionPhase==='button')closePanel();return;}
+    selectionBackward=selection.direction==='backward';const range=readSelectionRange(selection);
+    const start=range?.startContainer??selection.anchorNode,end=range?.endContainer;
+    const element=start instanceof Element?start:start?.parentElement,endElement=end instanceof Element?end:end?.parentElement;
+    let focused=document.activeElement;while(focused?.shadowRoot?.activeElement)focused=focused.shadowRoot.activeElement;
+    if(!element||isBlocked(element,selectionBlocked)||(endElement&&isBlocked(endElement,selectionBlocked))||(focused&&isBlocked(focused,selectionBlocked))){if(selectionPhase==='button')closePanel();return;}
+    // Inaccessible roots can use this pointer release; an unknown/zero range must never anchor at (0, 0).
+    const anchor=range?selectionRect(range):selectionPoint?new DOMRect(selectionPoint.x,selectionPoint.y,0,0):undefined;
+    if(!anchor){if(selectionPhase==='button')closePanel();return;}
+    selectionText=text;selectionContext=range?(element.closest(blockSelector)??element).textContent?.slice(0,2500)??'':'';
+    selectionRange=range;selectionAnchor=anchor;trigger();
   }
   // No text leaves the page in these selection listeners; only an explicit click invokes translation.
-  document.addEventListener('pointerup',event=>{if(panelHost&&event.composedPath().includes(panelHost))return;if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,90);},{passive:true});
-  document.addEventListener('keyup',event=>{if(event.key==='Escape'){closePanel();return;}if(event.shiftKey||['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,100);}});
+  document.addEventListener('pointerup',event=>{if(panelHost&&event.composedPath().includes(panelHost))return;rememberSelection(event);if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,90);},{passive:true});
+  document.addEventListener('keyup',event=>{if(event.key==='Escape'){if(selectionTimer)clearTimeout(selectionTimer);closePanel();return;}if(event.shiftKey||['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){if(panelHost&&event.composedPath().includes(panelHost))return;rememberSelection(event);if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,100);}});
   document.addEventListener('pointerdown',event=>{if(panelHost&&!event.composedPath().includes(panelHost)&&selectionPhase!=='button')closePanel();},{passive:true});
-  window.addEventListener('scroll',()=>{if(selectionPhase==='button')closePanel();},{passive:true});
+  document.addEventListener('scroll',()=>{if(selectionPhase==='button')closePanel();},{passive:true,capture:true});
   window.addEventListener('resize',positionPanel,{passive:true});
   window.addEventListener('pagehide',()=>{stop();closePanel();});
   chrome.runtime.onMessage.addListener((value,_sender,respond)=>{
     if(value?.type==='selection:refresh'){void refreshSelection();respond(true);return;}
     if(value?.type==='selection:progress'&&value.requestId===selectionRequest&&selectionPhase==='loading'){showResult(value.text,false,true);respond(true);return;}
     if(value?.type==='selection:open'){
-      selectionText=String(value.text??'');selectionContext='';selectionAnchor=new DOMRect(Math.max(12,innerWidth-390),80,1,1);closePanel();createPanel();void translateSelection(value.config);respond(true);return;
+      selectionText=String(value.text??'');selectionContext='';selectionRange=undefined;selectionAnchor=new DOMRect(Math.max(12,innerWidth-390),80,1,1);closePanel();createPanel();void translateSelection(value.config);respond(true);return;
     }
     if(!value?.type?.startsWith('page:'))return;
     const operation=async()=>{switch(value.type){

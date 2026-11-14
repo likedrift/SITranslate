@@ -1,0 +1,31 @@
+<!doctype html><html lang="zh-CN"><head><meta charset="utf-8"><title>Selection positioning fixture</title>
+<style>
+  body{margin:0;min-height:1800px;background:#17181a;color:#eee;font:18px system-ui;line-height:28px}
+  nav{position:fixed;top:0;left:0;right:0;height:60px;background:#242628;padding:12px;box-sizing:border-box}
+  main{margin-left:280px;padding-top:400px;width:min(600px,calc(100vw - 300px))}
+  p{margin:0 0 28px}#comments{display:block;margin-top:60px}
+  #edge{position:fixed;right:12px;bottom:12px;margin:0;width:max-content}
+  #scroller{height:80px;overflow:auto;margin-top:140px;width:420px}#scroller p{margin:0}#scroller div{height:220px}
+  #closed{display:block;margin-top:30px}#light{width:min(320px,100%)}
+</style></head><body>
+<nav>划词翻译定位测试</nav>
+<main>
+  <p id="light">This is the selected sentence.</p>
+  <bili-comments id="comments"></bili-comments>
+  <div id="scroller"><p id="scroll-sentence">滚动容器内选中的评论文字。</p><div></div></div>
+  <closed-comment id="closed"></closed-comment>
+</main>
+<p id="edge">屏幕右下角的选中文字。</p>
+<script>
+  const outer=document.querySelector('#comments').attachShadow({mode:'open'});
+  outer.innerHTML='<bili-comment-renderer></bili-comment-renderer>';
+  outer.firstElementChild.attachShadow({mode:'open'}).innerHTML=`
+    <style>p{margin:0 0 24px;line-height:28px}.multi{width:220px}input{display:block;margin-top:12px}</style>
+    <p id="shadow-sentence">你长得像打舞萌的！这是一条评论。</p>
+    <p id="shadow-multi" class="multi">跨越多行的评论，翻译按钮应该跟随选中文字的末行，反向选择时跟随首行。</p>
+    <div id="shadow-editable" contenteditable="true">可编辑的评论内容。</div>
+    <input id="shadow-input" value="不应触发划词的输入内容">
+  `;
+  document.querySelector('#closed').attachShadow({mode:'closed'}).innerHTML='<p style="margin:0;line-height:28px">封闭评论区的选中文字。</p>';
+</script>
+</body></html>
