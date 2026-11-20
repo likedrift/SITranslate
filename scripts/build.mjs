@@ -20,24 +20,139 @@ await build({configFile:false,publicDir:false,build:{outDir:'dist',emptyOutDir:f
   lib:{entry:'src/player-controls.ts',name:'SiPlayerControls',formats:['iife'],fileName:()=> 'player-controls.js'},
   rollupOptions:{output:{inlineDynamicImports:true}}}});
 
-// Small raster toolbar icons, generated locally without an external font or image dependency.
+// Antialiased brand icons with modern dual-card translation glyph, generated locally without external image dependencies.
 function crc32(bytes) { let crc = -1; for (const b of bytes) { crc ^= b; for (let k=0;k<8;k++) crc = (crc>>>1) ^ (0xedb88320 & -(crc&1)); } return (crc^-1)>>>0; }
 function chunk(type, body) { const t=Buffer.from(type); const size=Buffer.alloc(4); size.writeUInt32BE(body.length); const crc=Buffer.alloc(4); crc.writeUInt32BE(crc32(Buffer.concat([t,body]))); return Buffer.concat([size,t,body,crc]); }
+
+function sdRoundBox(px, py, cx, cy, hx, hy, r) {
+  const qx = Math.abs(px - cx) - hx + r;
+  const qy = Math.abs(py - cy) - hy + r;
+  return Math.min(Math.max(qx, qy), 0) + Math.hypot(Math.max(qx, 0), Math.max(qy, 0)) - r;
+}
+
+function sdSegment(px, py, ax, ay, bx, by) {
+  const pax = px - ax, pay = py - ay;
+  const bax = bx - ax, bay = by - ay;
+  const h = Math.max(0, Math.min(1, (pax * bax + pay * bay) / (bax * bax + bay * bay)));
+  return Math.hypot(pax - bax * h, pay - bay * h);
+}
+
 function icon(size) {
-  const data=Buffer.alloc(size*(size*4+1));
-  for(let y=0;y<size;y++) for(let x=0;x<size;x++) {
-    const u=x/size,v=y/size, radius=.18;
-    const dx=Math.max(radius-u,0,u-(1-radius)),dy=Math.max(radius-v,0,v-(1-radius));
-    const inside=dx*dx+dy*dy<=radius*radius;
-    const stroke=(u>.25&&u<.75&&v>.27&&v<.36)||(u>.455&&u<.545&&v>.3&&v<.74);
-    const i=y*(size*4+1)+1+x*4;
-    data.set(stroke?[255,255,255,255]:[11,87,208,inside?255:0],i);
+  const rowSize = size * 4 + 1;
+  const data = Buffer.alloc(size * rowSize);
+  const pxSize = 1 / size;
+  const strokeW = Math.max(0.024, 0.65 / size);
+
+  for (let y = 0; y < size; y++) {
+    data[y * rowSize] = 0;
+    for (let x = 0; x < size; x++) {
+      const u = (x + 0.5) / size;
+      const v = (y + 0.5) / size;
+
+      // Base squircle
+      const dBase = sdRoundBox(u, v, 0.5, 0.5, 0.44, 0.44, 0.22);
+      const aBase = Math.max(0, Math.min(1, 0.5 - dBase / pxSize));
+      if (aBase <= 0) continue;
+
+      // Diagonal gradient: #3b82f6 -> #2563eb -> #4f46e5
+      const tGrad = u * 0.7 + v * 0.9;
+      let r = 37 + (79 - 37) * Math.min(1, tGrad);
+      let g = 99 + (70 - 99) * Math.min(1, tGrad);
+      let b = 235 + (229 - 235) * Math.min(1, tGrad);
+
+      // Inner top highlight
+      const dInnerTop = sdRoundBox(u, v - 0.015, 0.5, 0.5, 0.42, 0.42, 0.20);
+      if (dBase < 0 && dInnerTop > 0 && v < 0.3) {
+        const hLight = Math.max(0, Math.min(1, 1 - Math.abs(dBase) / 0.04)) * 0.32;
+        r = r * (1 - hLight) + 255 * hLight;
+        g = g * (1 - hLight) + 255 * hLight;
+        b = b * (1 - hLight) + 255 * hLight;
+      }
+
+      // Card 1 (Back left, translucent white)
+      const dCard1 = sdRoundBox(u, v, 0.38, 0.38, 0.21, 0.21, 0.08);
+      const aCard1 = Math.max(0, Math.min(1, 0.5 - dCard1 / pxSize));
+
+      // Card 2 (Front right, opaque white)
+      const dCard2 = sdRoundBox(u, v, 0.62, 0.62, 0.21, 0.21, 0.08);
+      const aCard2 = Math.max(0, Math.min(1, 0.5 - dCard2 / pxSize));
+
+      // Drop shadow of Card 2
+      const dShadow = sdRoundBox(u + 0.025, v + 0.025, 0.62, 0.62, 0.22, 0.22, 0.09);
+      const aShadow = Math.max(0, Math.min(1, 0.5 - dShadow / (pxSize * 2.5))) * 0.35;
+
+      if (aCard1 > 0) {
+        const c1Opacity = 0.34 * aCard1;
+        r = r * (1 - c1Opacity) + 255 * c1Opacity;
+        g = g * (1 - c1Opacity) + 255 * c1Opacity;
+        b = b * (1 - c1Opacity) + 255 * c1Opacity;
+      }
+
+      // Letter 'A' in Card 1
+      const dLegL = sdSegment(u, v, 0.32, 0.48, 0.38, 0.28) - strokeW;
+      const dLegR = sdSegment(u, v, 0.38, 0.28, 0.44, 0.48) - strokeW;
+      const dBar = sdSegment(u, v, 0.34, 0.42, 0.42, 0.42) - strokeW * 0.9;
+      const aA = Math.max(0, Math.min(1, 0.5 - Math.min(dLegL, dLegR, dBar) / pxSize));
+      if (aA > 0 && aCard1 > 0.5) {
+        r = r * (1 - aA) + 255 * aA;
+        g = g * (1 - aA) + 255 * aA;
+        b = b * (1 - aA) + 255 * aA;
+      }
+
+      // Shadow behind Card 2
+      if (aShadow > 0 && aCard2 < 0.5) {
+        r *= 1 - aShadow;
+        g *= 1 - aShadow;
+        b *= 1 - aShadow;
+      }
+
+      // Card 2 body
+      if (aCard2 > 0) {
+        r = r * (1 - aCard2) + 255 * aCard2;
+        g = g * (1 - aCard2) + 255 * aCard2;
+        b = b * (1 - aCard2) + 255 * aCard2;
+      }
+
+      // Character '文' in Card 2
+      const dWenTop = sdSegment(u, v, 0.53, 0.52, 0.71, 0.52) - strokeW;
+      const dWenDot = sdSegment(u, v, 0.62, 0.45, 0.62, 0.52) - strokeW;
+      const dWenLeg1 = sdSegment(u, v, 0.65, 0.53, 0.53, 0.72) - strokeW;
+      const dWenLeg2 = sdSegment(u, v, 0.58, 0.56, 0.71, 0.72) - strokeW;
+      const aWen = Math.max(0, Math.min(1, 0.5 - Math.min(dWenTop, dWenDot, dWenLeg1, dWenLeg2) / pxSize));
+      if (aWen > 0 && aCard2 > 0.5) {
+        const wR = 37, wG = 99, wB = 235;
+        r = r * (1 - aWen) + wR * aWen;
+        g = g * (1 - aWen) + wG * aWen;
+        b = b * (1 - aWen) + wB * aWen;
+      }
+
+      const offset = y * rowSize + 1 + x * 4;
+      data[offset] = Math.round(r);
+      data[offset + 1] = Math.round(g);
+      data[offset + 2] = Math.round(b);
+      data[offset + 3] = Math.round(aBase * 255);
+    }
   }
-  const header=Buffer.alloc(13); header.writeUInt32BE(size);header.writeUInt32BE(size,4);header[8]=8;header[9]=6;
-  return Buffer.concat([Buffer.from([137,80,78,71,13,10,26,10]),chunk('IHDR',header),chunk('IDAT',deflateSync(data)),chunk('IEND',Buffer.alloc(0))]);
+
+  const header = Buffer.alloc(13);
+  header.writeUInt32BE(size, 0);
+  header.writeUInt32BE(size, 4);
+  header[8] = 8;
+  header[9] = 6;
+  return Buffer.concat([
+    Buffer.from([137, 80, 78, 71, 13, 10, 26, 10]),
+    chunk('IHDR', header),
+    chunk('IDAT', deflateSync(data)),
+    chunk('IEND', Buffer.alloc(0))
+  ]);
 }
 await mkdir('dist/icons',{recursive:true});
-for(const size of [16,32,48,128]) await writeFile(`dist/icons/${size}.png`,icon(size));
+await mkdir('public/icons',{recursive:true});
+for(const size of [16,32,48,128]) {
+  const png = icon(size);
+  await writeFile(`dist/icons/${size}.png`, png);
+  await writeFile(`public/icons/${size}.png`, png);
+}
 const rows=[];
 async function inspect(dir) { for(const name of await readdir(dir)) { const file=path.join(dir,name); if((await stat(file)).isDirectory()) await inspect(file); else { const data=await readFile(file); rows.push({file:file.replaceAll('\\','/'),bytes:data.length,gzip:gzipSync(data).length}); } } }
 await inspect('dist');

@@ -207,10 +207,13 @@ function boot(){
 
   const panelCss=`:host{all:initial;color-scheme:light dark;position:fixed;z-index:2147483647;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;color:#202438;line-height:1.5}
     *{box-sizing:border-box}button{font:inherit;cursor:pointer;border:0;border-radius:12px;padding:8px 12px;background:#edf0ff;color:#384897}button:hover{background:#e1e6ff}button:focus-visible{outline:2px solid #5264ce;outline-offset:2px}
-    .trigger{border-radius:50%;width:36px;height:36px;padding:0;background:#4452a8;color:white;box-shadow:0 3px 14px #0003;display:grid;place-items:center;font-size:16px}
-    .card{width:min(360px,calc(100vw - 24px));border:1px solid #dde0ed;background:#fff;box-shadow:0 8px 32px #18204026;border-radius:18px;padding:16px}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;font-size:13px;color:#626779}.actions{display:flex;gap:8px;margin-top:14px}.result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:min(330px,60vh);overflow:auto;user-select:text}.error{color:#a32c36}.close{padding:0;width:28px;height:28px;background:transparent;font-size:19px}.hint{font-size:12px;color:#686f84;margin-top:10px}.dots{color:#4452a8}.sr{position:absolute;width:1px;height:1px;clip-path:inset(50%)}
-    @media(prefers-color-scheme:dark){:host{color:#e9ebf6}.card{background:#202332;border-color:#41465d}.hint,header{color:#b1b7ce}button{background:#343d67;color:#d5dcff}button:hover{background:#44517d}.error{color:#ffb4b7}}`;
+    .trigger{border-radius:11px;width:36px;height:36px;padding:0;background:linear-gradient(135deg,#3b82f6 0%,#2563eb 50%,#4f46e5 100%);color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.38),0 1px 3px rgba(0,0,0,.12);border:1px solid rgba(255,255,255,.28);display:grid;place-items:center;transition:all .2s cubic-bezier(.16,1,.3,1)}
+    .trigger:hover{transform:scale(1.12);box-shadow:0 6px 20px rgba(37,99,235,.48),0 2px 6px rgba(0,0,0,.15);filter:brightness(1.08)}
+    .trigger:active{transform:scale(.94)}
+    .trigger svg{display:block;pointer-events:none}
+    .card{width:min(360px,calc(100vw - 24px));border:1px solid #dde0ed;background:#fff;box-shadow:0 10px 36px rgba(24,32,64,.18);border-radius:18px;padding:16px}
+    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:12px;font-size:13px;font-weight:500;color:#505569}.actions{display:flex;gap:8px;margin-top:14px}.result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:min(330px,60vh);overflow:auto;user-select:text}.error{color:#a32c36}.close{padding:0;width:28px;height:28px;background:transparent;font-size:19px;border-radius:14px;color:#858ba0;display:grid;place-items:center;transition:all .15s ease}.close:hover{background:#f0f2f8;color:#202438}.hint{font-size:12px;color:#788096;margin-top:10px}.dots{color:#2563eb}.sr{position:absolute;width:1px;height:1px;clip-path:inset(50%)}
+    @media(prefers-color-scheme:dark){:host{color:#e9ebf6}.card{background:#1e202c;border-color:#353a4e;box-shadow:0 12px 40px rgba(0,0,0,.45)}.hint,header{color:#a2a8be}button{background:#2d334d;color:#d5dcff}button:hover{background:#3b4366}.close:hover{background:#2d334d;color:#fff}.error{color:#ffb4b7}}`;
   function positionPanel(){
     if(!panelHost||!selectionAnchor)return;
     if(selectionRange){const rect=selectionRect(selectionRange);if(rect)selectionAnchor=rect;else if(selectionPhase==='button'){closePanel();return;}}
@@ -240,7 +243,11 @@ function boot(){
   }
   function button(label:string,fn:()=>void,className=''){const b=document.createElement('button');b.type='button';b.textContent=label;b.className=className;b.addEventListener('click',fn);return b;}
   function trigger(){
-    closePanel();selectionPhase='button';createPanel();const b=button('译',()=>void translateSelection(),'trigger');b.setAttribute('aria-label','翻译选中文字');b.title='翻译选中文字（点击后发送）';
+    closePanel();selectionPhase='button';createPanel();
+    const b=document.createElement('button');b.type='button';b.className='trigger';
+    b.setAttribute('aria-label','翻译选中文字');b.title='翻译选中文字（思译）';
+    b.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`;
+    b.addEventListener('click',()=>void translateSelection());
     b.addEventListener('pointerdown',event=>event.preventDefault());panelRoot!.append(b);positionPanel();
   }
   function showResult(text:string,error=false,loading=false){

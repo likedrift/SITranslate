@@ -108,7 +108,16 @@ select:focus-visible, textarea:focus-visible {
 .brand { display: flex; align-items: center; gap: 12px; }
 .brand-mark {
   display: grid; place-items: center; flex-shrink: 0; width: 40px; height: 40px; border-radius: 12px;
-  color: var(--on-mark); background: var(--mark); font-size: 20px; font-weight: 500;
+  background: linear-gradient(135deg, #3b82f6 0%, #2563eb 50%, #4f46e5 100%);
+  color: #fff;
+  box-shadow: 0 4px 12px rgba(37, 99, 235, 0.28), inset 0 1px 1px rgba(255, 255, 255, 0.35);
+}
+.brand-mark svg { display: block; }
+@media (prefers-color-scheme: dark) {
+  .brand-mark {
+    background: linear-gradient(135deg, #2563eb 0%, #3b82f6 55%, #60a5fa 100%);
+    box-shadow: 0 4px 16px rgba(37, 99, 235, 0.35), inset 0 1px 1px rgba(255, 255, 255, 0.4);
+  }
 }
 .brand-link { color: var(--text); }
 .icon-button {
@@ -145,7 +154,8 @@ select:focus-visible, textarea:focus-visible {
 .popup { width: 360px; max-height: 600px; overflow-x: hidden; overflow-y: auto; background: var(--surface); }
 .popup main { padding: var(--space-4); display: flex; flex-direction: column; gap: var(--space-3); }
 .popup h1 { font-size: 18px; }
-.popup .brand-mark { width: 36px; height: 36px; font-size: 18px; }
+.popup .brand-mark { width: 36px; height: 36px; border-radius: 10px; }
+.popup .brand-mark svg { width: 20px; height: 20px; }
 .primary-block { display: flex; flex-direction: column; gap: var(--space-3); }
 .popup-fields { display: grid; grid-template-columns: 1fr 1fr; gap: var(--space-3); }
 .popup input:not([type=checkbox]):not([type=radio]):not([type=range]) {
