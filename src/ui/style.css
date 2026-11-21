@@ -169,7 +169,7 @@ select:focus-visible, textarea:focus-visible {
 .popup select:hover { background-color: var(--surface-container-high); }
 .popup select:focus-visible { background-color: var(--surface); border-color: var(--primary); }
 .segmented {
-  display: flex; gap: 3px; margin: 0; padding: 3px; border: 1px solid var(--outline-variant); min-inline-size: 0;
+  display: flex; align-items: stretch; gap: 3px; margin: 0; padding: 3px; border: 1px solid var(--outline-variant); min-inline-size: 0;
   height: 38px; box-sizing: border-box; border-radius: 11px; background: var(--surface-container);
 }
 .segmented label { flex: 1; position: relative; cursor: pointer; text-align: center; gap: 0; color: var(--muted); }

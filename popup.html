@@ -31,11 +31,10 @@
       <label>翻译为<select id="target"></select></label>
       <label>使用模型<select id="profile"></select></label>
     </div>
-    <fieldset class="segmented">
-      <legend class="sr-only">显示方式</legend>
+    <div class="segmented" role="radiogroup" aria-label="显示方式">
       <label><input type="radio" name="display" value="replace" checked><span>译文</span></label>
       <label><input type="radio" name="display" value="bilingual"><span>双语对照</span></label>
-    </fieldset>
+    </div>
     <button class="primary translate-button" id="translate" type="button">翻译此页</button>
     <section class="progress-card" id="progress-card" hidden aria-live="polite">
       <div class="progress-heading"><span id="state">准备翻译</span><span id="count"></span></div>
