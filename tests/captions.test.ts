@@ -2,6 +2,7 @@ import {test} from 'node:test';import assert from 'node:assert/strict';
 import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,captionBounds,captionChrome,captionGeometryPatch,captionGestureLayout,captionPages,resizeCaptionBox,scaleCaptionFont,type CaptionCorner} from '../src/core/caption-layout.ts';
 import {NO_VIDEO_CAPTION_MESSAGE} from '../src/core/types.ts';
 import {Utterances,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
+import {YouTubeCaptionTracker} from '../src/core/subtitles.ts';
 test('Caption original display migrates once onto showOriginal',()=>{
   const legacy={...DEFAULT_CAPTION,fontSize:30,showOriginal:undefined,bilingual:false};
   const migrated=migrateCaption(legacy);
@@ -118,4 +119,36 @@ test('Japanese quote endings stay with the sentence, context preserves previous 
 test('Utterance items stay capped at 32 across a long run of distinct item ids',()=>{
   const u=new Utterances();for(let i=0;i<80;i++)u.update(`id-${i}`,'一句。',true,i);assert.equal(u.size,32);assert.equal(u.emittedCount,32);
   assert.equal(u.update('id-0','一句。',true,80).length,1);assert.equal(u.size,32);assert.equal(u.emittedCount,32);
+});
+test('YouTube rolling word-by-word captions do not starve debounce and keep overlapping translations visible',()=>{
+  const yt=new YouTubeCaptionTracker();
+  // Word arrives every 200 ms: previously 350 ms debounce reset forever and starved requests.
+  yt.update(['Today we'],0);assert.deepEqual(yt.readyToTranslate(100),[]);
+  yt.update(['Today we are'],200);assert.deepEqual(yt.readyToTranslate(300),[]);
+  yt.update(['Today we are going'],400);assert.deepEqual(yt.readyToTranslate(500),[]);
+  yt.update(['Today we are going to'],600);assert.deepEqual(yt.readyToTranslate(700),[]);
+  yt.update(['Today we are going to talk'],800);
+  const firstBatch=yt.readyToTranslate(800);
+  assert.deepEqual(firstBatch.map(p=>p.text),['Today we are going to talk']);
+  yt.markDispatched();
+  // While the request is in flight, the caption keeps growing.
+  yt.update(['Today we are going to talk about code'],1100);
+  yt.applyTranslations([{source:'Today we are going to talk',translation:'今天我们要聊一聊'}],1200);
+  // The returned translation must still display via overlap instead of being dropped!
+  assert.equal(yt.display().translation,'今天我们要聊一聊');
+  // And the newly appended text is still scheduled for translation.
+  const followUp=yt.readyToTranslate(1500);
+  assert.deepEqual(followUp.map(p=>p.text),['Today we are going to talk about code']);
+  // Rolling to a second line reuses cached line 1 and only translates line 2.
+  yt.applyTranslations([{source:'Today we are going to talk about code',translation:'今天我们要聊代码'}],1700);
+  yt.update(['Today we are going to talk about code','and how it works.'],1800);
+  assert.equal(yt.display().translation,'今天我们要聊代码');
+  const secondLine=yt.readyToTranslate(1960);
+  assert.deepEqual(secondLine.map(p=>p.text),['and how it works.']);
+  assert.equal(secondLine[0].context,'Today we are going to talk about code');
+  yt.applyTranslations([{source:'and how it works.',translation:'以及它如何工作。'}],2100);
+  assert.equal(yt.display().translation,'今天我们要聊代码\n以及它如何工作。');
+  // Hiding captions clears display cleanly.
+  yt.update([],2200);
+  assert.deepEqual(yt.display(),{source:'',translation:''});
 });

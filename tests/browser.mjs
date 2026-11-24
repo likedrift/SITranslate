@@ -423,6 +423,13 @@ try{
     await page.locator('.ytp-caption-segment').evaluate(e=>e.textContent='Hello world.');await until(async()=> (await captionText()).includes('你好，世界。'));
     await act('start');await complete();assert.equal(await page.locator('.ytp-caption-segment').textContent(),'Hello world.');await act('restore');
     await page.locator('.ytp-caption-segment').evaluate(e=>e.textContent='English and 日本語 mixed.');await until(async()=> (await captionText()).includes('英语和日语混合。'));
+    // Auto-generated YouTube captions update every ~200 ms without pausing; max-wait must still translate and show them.
+    delay=250;
+    try{
+      const rolling=['Auto caption word','Auto caption word one','Auto caption word one two','Auto caption word one two three','Auto caption word one two three four','Auto caption word one two three four five'];
+      for(const sample of rolling){await page.locator('.ytp-caption-segment').evaluate((e,t)=>{e.textContent=t;},sample);await new Promise(r=>setTimeout(r,200));}
+      await until(async()=>(await captionText()).includes('译：Auto caption word'));
+    }finally{delay=0;}
     await page.locator('.ytp-caption-window-container').evaluate(e=>e.style.display='none');await until(async()=>await page.locator('[data-si-owned=video]').isHidden());
     await page.evaluate(()=>history.pushState({},'','/watch?v=another'));await until(async()=> (await rpc('video:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
     await context.unroute('https://www.youtube.com/watch*');
