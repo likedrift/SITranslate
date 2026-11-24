@@ -157,12 +157,13 @@ async function selectionState(url:string){
   return {enabled:configured&&await chrome.permissions.contains({origins:[pattern]}),supported:true};
 }
 async function playerStatus(tabId:number):Promise<PlayerState>{
-  const [voice,video,commands]=await Promise.all([
+  const [voice,video,commands,layout]=await Promise.all([
     speech.statusForTab(tabId),
     chrome.tabs.sendMessage(tabId,{type:'video:player-status'},{frameId:0}).catch(()=>undefined),
-    chrome.commands.getAll()
+    chrome.commands.getAll(),
+    captionLayout()
   ]);
-  return {speech:voice,captions:video&&typeof video.state==='string'&&typeof video.message==='string'?{state:video.state,message:video.message}:{state:'idle',message:''},shortcut:commands.find(c=>c.name==='toggle-speech')?.shortcut??''};
+  return {speech:voice,captions:video&&typeof video.state==='string'&&typeof video.message==='string'?{state:video.state,message:video.message}:{state:'idle',message:''},shortcut:commands.find(c=>c.name==='toggle-speech')?.shortcut??'',showOriginal:layout.showOriginal};
 }
 async function route(message:any,sender:chrome.runtime.MessageSender){
   await initialized;if(!message||typeof message.type!=='string')throw new Error('无效消息。');
@@ -174,6 +175,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     if(message.type==='player:changed'){void chrome.tabs.sendMessage(tabId,{type:'player:refresh'},{frameId:0}).catch(()=>{});return;}
     if(message.type==='player:settings')return chrome.runtime.openOptionsPage();
     if(message.type==='player:shortcuts'){await chrome.tabs.create({url:'chrome://extensions/shortcuts'});return;}
+    if(message.type==='player:bilingual'){await saveCaption({showOriginal:message.showOriginal!==false});return playerStatus(tabId);}
     if(message.type!=='player:action'||!['speech','captions'].includes(message.mode)||!['start','stop'].includes(message.action))throw new Error('不支持的播放器操作。');
     if(message.mode==='speech')await speech.controlTab(tabId,message.action);
     else{
@@ -195,6 +197,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   }
   if(message.type==='caption:geometry'&&pageSender(sender))return saveCaption(captionGeometryPatch(String(message.context??''),message.position,message.size,message.fontSize));
   if(message.type==='selection:state'&&(ui||pageSender(sender)))return selectionState(ui?String(message.url??''):sender.url!);
+  if(message.type==='selection:settings'&&pageSender(sender))return chrome.runtime.openOptionsPage();
   if(message.type==='translate')return translate(message.input,sender);
   if(message.type==='page:config'&&pageSender(sender))return safeConfig();
   if(message.type==='page:status'&&pageSender(sender)){

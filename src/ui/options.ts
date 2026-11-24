@@ -98,6 +98,7 @@ el('delete-profile').addEventListener('click',()=>{
   editing=settings.activeProfileId;fillProfile();markDirty('配置已移除，保存后生效。');
 });
 el('toggle-key').addEventListener('click',()=>{const key=el<HTMLInputElement>('api-key');key.type=key.type==='password'?'text':'password';el('toggle-key').textContent=key.type==='password'?'显示':'隐藏';el('toggle-key').setAttribute('aria-label',key.type==='password'?'显示 API Key':'隐藏 API Key');});
+el('toggle-speech-key').addEventListener('click',()=>{const key=el<HTMLInputElement>('speech-key');key.type=key.type==='password'?'text':'password';el('toggle-speech-key').textContent=key.type==='password'?'显示':'隐藏';el('toggle-speech-key').setAttribute('aria-label',key.type==='password'?'显示语音 API Key':'隐藏语音 API Key');});
 el('test').addEventListener('click',()=>{
   if(!settings){feedback('设置仍在加载。','error');return;}
   let saved:Promise<void>;try{saved=save();}catch(err){feedback((err as Error).message,'error');el('test-result').textContent='';return;}
@@ -153,6 +154,7 @@ el('clear-cache').addEventListener('click',()=>rpc('cache:clear').then(refreshUs
 el('clear-usage').addEventListener('click',()=>rpc('usage:clear').then(refreshUsage).then(()=>localStatus('data-feedback','用量统计已重置。','success')).catch(err=>localStatus('data-feedback',err.message,'error')));
 function paintSpeech(speech:SpeechSettings){
   for(const [id,key] of [['speech-key','apiKey'],['speech-endpoint','endpoint'],['speech-model','model'],['speech-language','language'],['speech-context','context']] as const)el<HTMLInputElement>(id).value=speech[key];
+  el<HTMLInputElement>('speech-key').type='password';el('toggle-speech-key').textContent='显示';el('toggle-speech-key').setAttribute('aria-label','显示语音 API Key');
   el<HTMLSelectElement>('speech-vad').value=String(vadSilenceMs(speech.silenceDurationMs));
   readSpeechAddress();speechModelHelp();
 }

@@ -41,7 +41,9 @@ function icon(size) {
   const rowSize = size * 4 + 1;
   const data = Buffer.alloc(size * rowSize);
   const pxSize = 1 / size;
-  const strokeW = Math.max(0.024, 0.65 / size);
+  const small = size <= 20;
+  const medium = size > 20 && size <= 36;
+  const strokeW = small ? 0.052 : medium ? 0.036 : Math.max(0.025, 0.65 / size);
 
   for (let y = 0; y < size; y++) {
     data[y * rowSize] = 0;
@@ -49,81 +51,100 @@ function icon(size) {
       const u = (x + 0.5) / size;
       const v = (y + 0.5) / size;
 
-      // Base squircle
-      const dBase = sdRoundBox(u, v, 0.5, 0.5, 0.44, 0.44, 0.22);
+      // Base squircle: clean cobalt blue without purple AI gradient.
+      const pad = small ? 0.47 : 0.45;
+      const radius = small ? 0.23 : 0.22;
+      const dBase = sdRoundBox(u, v, 0.5, 0.5, pad, pad, radius);
       const aBase = Math.max(0, Math.min(1, 0.5 - dBase / pxSize));
       if (aBase <= 0) continue;
 
-      // Diagonal gradient: #3b82f6 -> #2563eb -> #4f46e5
-      const tGrad = u * 0.7 + v * 0.9;
-      let r = 37 + (79 - 37) * Math.min(1, tGrad);
-      let g = 99 + (70 - 99) * Math.min(1, tGrad);
-      let b = 235 + (229 - 235) * Math.min(1, tGrad);
+      // Subtle vertical cobalt depth: #2563eb (top) -> #1d4ed8 (bottom)
+      const tGrad = Math.max(0, Math.min(1, v * 0.95));
+      let r = 37 + (29 - 37) * tGrad;
+      let g = 99 + (78 - 99) * tGrad;
+      let b = 235 + (216 - 235) * tGrad;
 
-      // Inner top highlight
-      const dInnerTop = sdRoundBox(u, v - 0.015, 0.5, 0.5, 0.42, 0.42, 0.20);
-      if (dBase < 0 && dInnerTop > 0 && v < 0.3) {
-        const hLight = Math.max(0, Math.min(1, 1 - Math.abs(dBase) / 0.04)) * 0.32;
-        r = r * (1 - hLight) + 255 * hLight;
-        g = g * (1 - hLight) + 255 * hLight;
-        b = b * (1 - hLight) + 255 * hLight;
+      if (!small) {
+        const dInnerTop = sdRoundBox(u, v - 0.012, 0.5, 0.5, pad - 0.018, pad - 0.018, radius - 0.02);
+        if (dBase < 0 && dInnerTop > 0 && v < 0.28) {
+          const hLight = Math.max(0, Math.min(1, 1 - Math.abs(dBase) / 0.035)) * 0.22;
+          r = r * (1 - hLight) + 255 * hLight;
+          g = g * (1 - hLight) + 255 * hLight;
+          b = b * (1 - hLight) + 255 * hLight;
+        }
       }
 
-      // Card 1 (Back left, translucent white)
-      const dCard1 = sdRoundBox(u, v, 0.38, 0.38, 0.21, 0.21, 0.08);
-      const aCard1 = Math.max(0, Math.min(1, 0.5 - dCard1 / pxSize));
+      if (small) {
+        // 16px crisp simplified mark: bold white "文" centered on cobalt squircle for instant legibility.
+        const dWenDot = sdSegment(u, v, 0.50, 0.24, 0.50, 0.34) - strokeW;
+        const dWenTop = sdSegment(u, v, 0.26, 0.36, 0.74, 0.36) - strokeW;
+        const dWenLeg1 = sdSegment(u, v, 0.61, 0.39, 0.28, 0.76) - strokeW;
+        const dWenLeg2 = sdSegment(u, v, 0.39, 0.44, 0.72, 0.76) - strokeW;
+        const aWen = Math.max(0, Math.min(1, 0.5 - Math.min(dWenDot, dWenTop, dWenLeg1, dWenLeg2) / pxSize));
+        if (aWen > 0) {
+          r = r * (1 - aWen) + 255 * aWen;
+          g = g * (1 - aWen) + 255 * aWen;
+          b = b * (1 - aWen) + 255 * aWen;
+        }
+      } else {
+        // Card 1 (Back left, translucent white)
+        const c1Pos = medium ? 0.37 : 0.38;
+        const c1Half = medium ? 0.215 : 0.21;
+        const dCard1 = sdRoundBox(u, v, c1Pos, c1Pos, c1Half, c1Half, 0.075);
+        const aCard1 = Math.max(0, Math.min(1, 0.5 - dCard1 / pxSize));
 
-      // Card 2 (Front right, opaque white)
-      const dCard2 = sdRoundBox(u, v, 0.62, 0.62, 0.21, 0.21, 0.08);
-      const aCard2 = Math.max(0, Math.min(1, 0.5 - dCard2 / pxSize));
+        // Card 2 (Front right, crisp white)
+        const c2Pos = medium ? 0.63 : 0.62;
+        const c2Half = medium ? 0.225 : 0.215;
+        const dCard2 = sdRoundBox(u, v, c2Pos, c2Pos, c2Half, c2Half, 0.075);
+        const aCard2 = Math.max(0, Math.min(1, 0.5 - dCard2 / pxSize));
 
-      // Drop shadow of Card 2
-      const dShadow = sdRoundBox(u + 0.025, v + 0.025, 0.62, 0.62, 0.22, 0.22, 0.09);
-      const aShadow = Math.max(0, Math.min(1, 0.5 - dShadow / (pxSize * 2.5))) * 0.35;
+        // Subtle crisp shadow behind Card 2
+        const dShadow = sdRoundBox(u + 0.018, v + 0.018, c2Pos, c2Pos, c2Half + 0.006, c2Half + 0.006, 0.08);
+        const aShadow = Math.max(0, Math.min(1, 0.5 - dShadow / (pxSize * (medium ? 1.5 : 2.0)))) * (medium ? 0.22 : 0.26);
 
-      if (aCard1 > 0) {
-        const c1Opacity = 0.34 * aCard1;
-        r = r * (1 - c1Opacity) + 255 * c1Opacity;
-        g = g * (1 - c1Opacity) + 255 * c1Opacity;
-        b = b * (1 - c1Opacity) + 255 * c1Opacity;
-      }
+        if (aCard1 > 0) {
+          const c1Opacity = 0.28 * aCard1;
+          r = r * (1 - c1Opacity) + 255 * c1Opacity;
+          g = g * (1 - c1Opacity) + 255 * c1Opacity;
+          b = b * (1 - c1Opacity) + 255 * c1Opacity;
+        }
 
-      // Letter 'A' in Card 1
-      const dLegL = sdSegment(u, v, 0.32, 0.48, 0.38, 0.28) - strokeW;
-      const dLegR = sdSegment(u, v, 0.38, 0.28, 0.44, 0.48) - strokeW;
-      const dBar = sdSegment(u, v, 0.34, 0.42, 0.42, 0.42) - strokeW * 0.9;
-      const aA = Math.max(0, Math.min(1, 0.5 - Math.min(dLegL, dLegR, dBar) / pxSize));
-      if (aA > 0 && aCard1 > 0.5) {
-        r = r * (1 - aA) + 255 * aA;
-        g = g * (1 - aA) + 255 * aA;
-        b = b * (1 - aA) + 255 * aA;
-      }
+        // Letter 'A' in Card 1
+        const dLegL = sdSegment(u, v, c1Pos - 0.06, c1Pos + 0.095, c1Pos, c1Pos - 0.10) - strokeW;
+        const dLegR = sdSegment(u, v, c1Pos, c1Pos - 0.10, c1Pos + 0.06, c1Pos + 0.095) - strokeW;
+        const dBar = sdSegment(u, v, c1Pos - 0.04, c1Pos + 0.04, c1Pos + 0.04, c1Pos + 0.04) - strokeW * 0.88;
+        const aA = Math.max(0, Math.min(1, 0.5 - Math.min(dLegL, dLegR, dBar) / pxSize));
+        if (aA > 0 && aCard1 > 0.5) {
+          r = r * (1 - aA) + 255 * aA;
+          g = g * (1 - aA) + 255 * aA;
+          b = b * (1 - aA) + 255 * aA;
+        }
 
-      // Shadow behind Card 2
-      if (aShadow > 0 && aCard2 < 0.5) {
-        r *= 1 - aShadow;
-        g *= 1 - aShadow;
-        b *= 1 - aShadow;
-      }
+        if (aShadow > 0 && aCard2 < 0.5) {
+          r *= 1 - aShadow;
+          g *= 1 - aShadow;
+          b *= 1 - aShadow;
+        }
 
-      // Card 2 body
-      if (aCard2 > 0) {
-        r = r * (1 - aCard2) + 255 * aCard2;
-        g = g * (1 - aCard2) + 255 * aCard2;
-        b = b * (1 - aCard2) + 255 * aCard2;
-      }
+        if (aCard2 > 0) {
+          r = r * (1 - aCard2) + 255 * aCard2;
+          g = g * (1 - aCard2) + 255 * aCard2;
+          b = b * (1 - aCard2) + 255 * aCard2;
+        }
 
-      // Character '文' in Card 2
-      const dWenTop = sdSegment(u, v, 0.53, 0.52, 0.71, 0.52) - strokeW;
-      const dWenDot = sdSegment(u, v, 0.62, 0.45, 0.62, 0.52) - strokeW;
-      const dWenLeg1 = sdSegment(u, v, 0.65, 0.53, 0.53, 0.72) - strokeW;
-      const dWenLeg2 = sdSegment(u, v, 0.58, 0.56, 0.71, 0.72) - strokeW;
-      const aWen = Math.max(0, Math.min(1, 0.5 - Math.min(dWenTop, dWenDot, dWenLeg1, dWenLeg2) / pxSize));
-      if (aWen > 0 && aCard2 > 0.5) {
-        const wR = 37, wG = 99, wB = 235;
-        r = r * (1 - aWen) + wR * aWen;
-        g = g * (1 - aWen) + wG * aWen;
-        b = b * (1 - aWen) + wB * aWen;
+        // Character '文' in Card 2
+        const dWenTop = sdSegment(u, v, c2Pos - 0.095, c2Pos - 0.095, c2Pos + 0.095, c2Pos - 0.095) - strokeW;
+        const dWenDot = sdSegment(u, v, c2Pos, c2Pos - 0.165, c2Pos, c2Pos - 0.095) - strokeW;
+        const dWenLeg1 = sdSegment(u, v, c2Pos + 0.032, c2Pos - 0.085, c2Pos - 0.092, c2Pos + 0.105) - strokeW;
+        const dWenLeg2 = sdSegment(u, v, c2Pos - 0.04, c2Pos - 0.055, c2Pos + 0.092, c2Pos + 0.105) - strokeW;
+        const aWen = Math.max(0, Math.min(1, 0.5 - Math.min(dWenTop, dWenDot, dWenLeg1, dWenLeg2) / pxSize));
+        if (aWen > 0 && aCard2 > 0.5) {
+          const wR = 29, wG = 78, wB = 216;
+          r = r * (1 - aWen) + wR * aWen;
+          g = g * (1 - aWen) + wG * aWen;
+          b = b * (1 - aWen) + wB * aWen;
+        }
       }
 
       const offset = y * rowSize + 1 + x * 4;

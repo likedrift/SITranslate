@@ -2,6 +2,7 @@ export interface PlayerState {
   speech: {state:string;message:string;needsActivation?:boolean};
   captions: {state:string;message:string};
   shortcut: string;
+  showOriginal: boolean;
 }
 
 export function isYouTubePage(url:string){

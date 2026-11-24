@@ -20,7 +20,7 @@ function boot(){
   let panelHost:HTMLElement|undefined,panelRoot:ShadowRoot|undefined,selectionText='',selectionContext='',selectionTask='',selectionRequest='',selectionAnchor:DOMRect|undefined;
   let selectionRange:Range|undefined,selectionRoots:ShadowRoot[]=[],selectionPoint:{x:number;y:number}|undefined,selectionBackward=false;
   let selectionTimer:ReturnType<typeof setTimeout>|undefined,selectionPhase:'button'|'loading'|'result'='button';
-  let selectionEnabled=false;
+  let selectionEnabled=false,panelDragged=false,copyResetTimer:ReturnType<typeof setTimeout>|undefined;
   async function refreshSelection(){try{const state=await message<{enabled:boolean}>({type:'selection:state'});selectionEnabled=state.enabled;if(!selectionEnabled)closePanel();}catch{selectionEnabled=false;}}
 
   async function message<T=unknown>(value:unknown):Promise<T>{
@@ -205,41 +205,76 @@ function boot(){
     status.failed=Math.max(0,status.failed-count);status.message='';void drain(generation);
   }
 
-  const panelCss=`:host{all:initial;color-scheme:light dark;position:fixed;z-index:2147483647;font-family:system-ui,-apple-system,"Segoe UI",sans-serif;font-size:14px;color:#1e293b;line-height:1.6}
+  const panelCss=`:host{all:initial;color-scheme:light dark;position:fixed;z-index:2147483647;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;font-size:14px;color:#0f172a;line-height:1.6}
     *{box-sizing:border-box}
-    button{font:inherit;cursor:pointer;border:0;border-radius:8px;padding:6px 12px;background:#f1f5f9;color:#334155;font-size:12.5px;font-weight:500;transition:all .15s ease}
-    button:hover{background:#e2e8f0;color:#0f172a}
-    button:focus-visible{outline:2px solid #3b82f6;outline-offset:1px}
-    .trigger{border-radius:11px;width:36px;height:36px;padding:0;background:linear-gradient(135deg,#3b82f6 0%,#2563eb 50%,#4f46e5 100%);color:#fff;box-shadow:0 4px 14px rgba(37,99,235,.38),0 1px 3px rgba(0,0,0,.12);border:1px solid rgba(255,255,255,.28);display:grid;place-items:center;transition:all .2s cubic-bezier(.16,1,.3,1)}
-    .trigger:hover{transform:scale(1.12);box-shadow:0 6px 20px rgba(37,99,235,.48),0 2px 6px rgba(0,0,0,.15);filter:brightness(1.08)}
-    .trigger:active{transform:scale(.94)}
+    @keyframes si-pop{from{opacity:0;transform:translateY(3px) scale(.985)}to{opacity:1;transform:none}}
+    @keyframes si-pulse{0%,80%,100%{opacity:.28;transform:scale(.85)}40%{opacity:1;transform:scale(1)}}
+    button{font:inherit;cursor:pointer;border:1px solid #e2e8f0;border-radius:8px;padding:5px 11px;background:#f8fafc;color:#334155;font-size:12.5px;font-weight:500;transition:background-color .15s ease,border-color .15s ease,color .15s ease,transform .1s ease}
+    button:hover{background:#f1f5f9;border-color:#cbd5e1;color:#0f172a}
+    button:active{transform:scale(.97)}
+    button:focus-visible{outline:2px solid #1d4ed8;outline-offset:1px}
+    .trigger{border-radius:10px;width:36px;height:36px;padding:0;background:#1d4ed8;color:#fff;box-shadow:0 3px 10px rgba(15,23,42,.22),0 1px 2px rgba(15,23,42,.12),inset 0 1px 0 rgba(255,255,255,.2);border:1px solid rgba(255,255,255,.16);display:grid;place-items:center;transition:background-color .15s ease,transform .15s ease,box-shadow .15s ease}
+    .trigger:hover{background:#1e40af;color:#fff;border-color:rgba(255,255,255,.22);transform:scale(1.06);box-shadow:0 6px 16px rgba(15,23,42,.26),0 2px 4px rgba(15,23,42,.14)}
+    .trigger:active{transform:scale(.95)}
     .trigger svg{display:block;pointer-events:none}
-    .card{width:min(360px,calc(100vw - 24px));background:rgba(255,255,255,0.96);backdrop-filter:blur(16px);-webkit-backdrop-filter:blur(16px);border:1px solid rgba(226,232,240,0.85);box-shadow:0 16px 40px -8px rgba(15,23,42,0.18),0 4px 12px -2px rgba(15,23,42,0.08);border-radius:16px;padding:14px 16px}
-    header{display:flex;align-items:center;justify-content:space-between;margin-bottom:10px;font-size:12px;font-weight:600;color:#64748b;letter-spacing:0.2px}
-    .actions{display:flex;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9}
-    .result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:min(330px,60vh);overflow-y:auto;user-select:text;font-size:14px;line-height:1.6;color:#0f172a}
+    .card{width:min(368px,calc(100vw - 24px));background:rgba(255,255,255,.97);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid #e2e8f0;box-shadow:0 14px 36px -8px rgba(15,23,42,.16),0 3px 10px -2px rgba(15,23,42,.07);border-radius:14px;padding:13px 15px}
+    .card.enter{animation:si-pop .14s ease-out}
+    header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px;border-radius:8px;font-size:12px;font-weight:600;color:#475569;cursor:grab;user-select:none;touch-action:none}
+    header.dragging{cursor:grabbing}
+    .title-wrap{display:flex;align-items:center;gap:7px;min-width:0}
+    .mini-mark{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;background:#1d4ed8;color:#fff;flex-shrink:0}
+    .mini-mark svg{display:block}
+    .loading-dots{display:inline-flex;align-items:center;gap:3px;margin-left:2px}
+    .loading-dots i{width:4px;height:4px;border-radius:50%;background:#1d4ed8;display:block;animation:si-pulse 1.1s infinite ease-in-out}
+    .loading-dots i:nth-child(2){animation-delay:.16s}
+    .loading-dots i:nth-child(3){animation-delay:.32s}
+    .actions{display:flex;align-items:center;gap:7px;margin-top:12px;padding-top:10px;border-top:1px solid #f1f5f9;flex-wrap:wrap}
+    .actions .copied{background:#eff6ff;border-color:#bfdbfe;color:#1d4ed8}
+    .result{white-space:pre-wrap;overflow-wrap:anywhere;max-height:min(330px,60vh);overflow-y:auto;user-select:text;font-size:14px;line-height:1.65;color:#0f172a;scrollbar-width:thin;scrollbar-color:#cbd5e1 transparent}
+    .result::-webkit-scrollbar{width:6px}
+    .result::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:999px}
     .error{color:#dc2626}
-    .close{padding:0;width:24px;height:24px;background:transparent;font-size:16px;border-radius:6px;color:#94a3b8;display:grid;place-items:center;transition:all .15s ease}
-    .close:hover{background:#f1f5f9;color:#334155}
-    .hint{font-size:11.5px;color:#94a3b8;margin-top:8px}
-    .dots{color:#2563eb}
+    .close{padding:0;width:24px;height:24px;border:0;background:transparent;font-size:16px;border-radius:6px;color:#64748b;display:grid;place-items:center;flex-shrink:0}
+    .close:hover{background:#f1f5f9;color:#0f172a}
+    .hint{font-size:11.5px;color:#64748b;margin-top:8px}
     .sr{position:absolute;width:1px;height:1px;clip-path:inset(50%)}
+    @media(prefers-reduced-motion:reduce){.card,.loading-dots i{animation:none!important}*{transition:none!important}}
     @media(prefers-color-scheme:dark){
-      :host{color:#f8fafc}
-      .card{background:rgba(26,28,38,0.96);border-color:rgba(51,65,85,0.6);box-shadow:0 20px 48px -8px rgba(0,0,0,0.55),0 4px 16px rgba(0,0,0,0.35)}
+      :host{color:#f1f5f9}
+      .trigger{background:#2563eb;box-shadow:0 4px 12px rgba(0,0,0,.42),inset 0 1px 0 rgba(255,255,255,.22)}
+      .trigger:hover{background:#3b82f6}
+      .card{background:rgba(22,25,32,.97);border-color:#2a303c;box-shadow:0 18px 44px -8px rgba(0,0,0,.6),0 4px 14px rgba(0,0,0,.38)}
       header{color:#94a3b8}
-      .result{color:#f8fafc}
-      .actions{border-top-color:#2e3346}
-      button{background:#2a2e40;color:#cbd5e1}
-      button:hover{background:#383e56;color:#fff}
-      .close:hover{background:#2a2e40;color:#f8fafc}
-      .hint{color:#64748b}
+      .mini-mark{background:#2563eb}
+      .loading-dots i{background:#60a5fa}
+      .result{color:#f1f5f9;scrollbar-color:#323846 transparent}
+      .result::-webkit-scrollbar-thumb{background:#323846}
+      .actions{border-top-color:#232833}
+      .actions .copied{background:rgba(59,130,246,.16);border-color:rgba(96,165,250,.35);color:#93c5fd}
+      button{background:#1e222b;border-color:#2a303c;color:#e2e8f0}
+      button:hover{background:#262b36;border-color:#3b4252;color:#fff}
+      .close{border:0;background:transparent;color:#94a3b8}
+      .close:hover{background:#262b36;color:#f1f5f9}
+      .hint{color:#94a3b8}
       .error{color:#f87171}
     }`;
+  function clampPanelPosition(x:number,y:number){
+    if(!panelHost)return;
+    const rect=panelHost.getBoundingClientRect();
+    const width=rect.width||(selectionPhase==='button'?36:Math.min(368,innerWidth-24));
+    const height=rect.height||36;
+    panelHost.style.left=`${Math.max(12,Math.min(innerWidth-width-12,x))}px`;
+    panelHost.style.top=`${Math.max(12,Math.min(innerHeight-height-12,y))}px`;
+  }
   function positionPanel(){
     if(!panelHost||!selectionAnchor)return;
+    if(panelDragged&&selectionPhase!=='button'){
+      const rect=panelHost.getBoundingClientRect();
+      clampPanelPosition(rect.left,rect.top);
+      return;
+    }
     if(selectionRange){const rect=selectionRect(selectionRange);if(rect)selectionAnchor=rect;else if(selectionPhase==='button'){closePanel();return;}}
-    const width=selectionPhase==='button'?36:Math.min(360,innerWidth-24);
+    const width=selectionPhase==='button'?36:Math.min(368,innerWidth-24);
     const height=panelHost.getBoundingClientRect().height||36;
     let x=selectionAnchor.left,y=selectionAnchor.bottom+8;
     if(selectionPhase==='button'){
@@ -254,39 +289,87 @@ function boot(){
     panelHost.style.top=`${Math.max(12,Math.min(innerHeight-height-12,y))}px`;
   }
   function closePanel(){
+    if(copyResetTimer){clearTimeout(copyResetTimer);copyResetTimer=undefined;}
     if(selectionTask)message({type:'task:cancel',taskId:selectionTask}).catch(()=>{});
-    selectionTask='';selectionRequest='';selectionPhase='button';panelHost?.remove();panelHost=undefined;panelRoot=undefined;
+    selectionTask='';selectionRequest='';selectionPhase='button';panelDragged=false;panelHost?.remove();panelHost=undefined;panelRoot=undefined;
   }
   function createPanel(){
-    panelHost?.remove();panelHost=document.createElement('div');panelHost.dataset.siOwned='panel';
+    panelHost?.remove();panelDragged=false;panelHost=document.createElement('div');panelHost.dataset.siOwned='panel';
     panelRoot=panelHost.attachShadow({mode:'closed'});const style=document.createElement('style');style.textContent=panelCss;panelRoot.append(style);
     document.documentElement.append(panelHost);
     panelHost.addEventListener('pointerdown',event=>event.stopPropagation());
   }
-  function button(label:string,fn:()=>void,className=''){const b=document.createElement('button');b.type='button';b.textContent=label;b.className=className;b.addEventListener('click',fn);return b;}
+  function button(label:string,fn:(e:MouseEvent)=>void,className=''){const b=document.createElement('button');b.type='button';b.textContent=label;b.className=className;b.addEventListener('click',fn);return b;}
+  function bindCardDrag(header:HTMLElement){
+    let dragging:{pointerId:number;startX:number;startY:number;left:number;top:number}|undefined;
+    header.addEventListener('pointerdown',event=>{
+      if(event.button!==0||!panelHost||(event.target instanceof Element&&event.target.closest('button')))return;
+      event.preventDefault();
+      const rect=panelHost.getBoundingClientRect();
+      dragging={pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,left:rect.left,top:rect.top};
+      header.classList.add('dragging');header.setPointerCapture(event.pointerId);
+    });
+    header.addEventListener('pointermove',event=>{
+      if(!dragging||event.pointerId!==dragging.pointerId)return;
+      panelDragged=true;
+      clampPanelPosition(dragging.left+event.clientX-dragging.startX,dragging.top+event.clientY-dragging.startY);
+    });
+    const end=(event:PointerEvent)=>{
+      if(!dragging||event.pointerId!==dragging.pointerId)return;
+      if(header.hasPointerCapture(event.pointerId))header.releasePointerCapture(event.pointerId);
+      header.classList.remove('dragging');dragging=undefined;
+    };
+    header.addEventListener('pointerup',end);header.addEventListener('pointercancel',end);
+  }
+  function brandMiniSvg(){
+    return `<span class="mini-mark" aria-hidden="true"><svg width="12" height="12" viewBox="0 0 32 32" fill="none"><rect x="4" y="4" width="16" height="16" rx="4" fill="white" fill-opacity="0.34"/><rect x="12" y="12" width="16" height="16" rx="4" fill="white"/><path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#1d4ed8" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg></span>`;
+  }
   function trigger(){
     closePanel();selectionPhase='button';createPanel();
     const b=document.createElement('button');b.type='button';b.className='trigger';
     b.setAttribute('aria-label','翻译选中文字');b.title='翻译选中文字（思译）';
-    b.innerHTML=`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m5 8 6 6"/><path d="m4 14 6-6 2-3"/><path d="M2 5h12"/><path d="M7 2h1"/><path d="m22 22-5-10-5 10"/><path d="M14 18h6"/></svg>`;
+    b.innerHTML=`<svg width="20" height="20" viewBox="0 0 32 32" fill="none" aria-hidden="true"><rect x="4" y="4" width="16" height="16" rx="4" fill="white" fill-opacity="0.32"/><path d="M9 17L12 9L15 17M10 14.5H14" stroke="white" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/><rect x="12" y="12" width="16" height="16" rx="4" fill="white"/><path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#1d4ed8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/></svg>`;
     b.addEventListener('click',()=>void translateSelection());
     b.addEventListener('pointerdown',event=>event.preventDefault());panelRoot!.append(b);positionPanel();
   }
   function showResult(text:string,error=false,loading=false){
     if(!panelRoot)return;
     const focused=!!panelRoot.activeElement,existing=panelRoot.querySelector('.card');
-    if(loading&&existing){existing.querySelector('.result')!.textContent=text;existing.querySelector('.result')!.className='result';existing.querySelector('header span')!.textContent='思译 · 正在翻译';existing.querySelector('.actions')?.remove();existing.querySelector('.hint')?.remove();positionPanel();return;}
+    if(loading&&existing){
+      existing.querySelector('.result')!.textContent=text;
+      existing.querySelector('.result')!.className='result';
+      const title=existing.querySelector('.title-text');if(title)title.textContent='思译 · 正在翻译';
+      if(!existing.querySelector('.loading-dots')){const dots=document.createElement('span');dots.className='loading-dots';dots.setAttribute('aria-hidden','true');dots.innerHTML='<i></i><i></i><i></i>';existing.querySelector('.title-wrap')?.append(dots);}
+      existing.querySelector('.actions')?.remove();existing.querySelector('.hint')?.remove();positionPanel();return;
+    }
     for(const child of [...panelRoot.children])if(child.tagName!=='STYLE')child.remove();
-    const card=document.createElement('section');card.className='card';card.setAttribute('role','dialog');card.setAttribute('aria-label','选中文字翻译');
-    const header=document.createElement('header'),label=document.createElement('span');label.textContent=loading?'思译 · 正在翻译':'思译 · 选中文字';header.append(label,button('×',closePanel,'close'));header.lastElementChild!.setAttribute('aria-label','关闭翻译');
+    const card=document.createElement('section');card.className=existing?'card':'card enter';card.setAttribute('role','dialog');card.setAttribute('aria-label','选中文字翻译');
+    const header=document.createElement('header');
+    const titleWrap=document.createElement('span');titleWrap.className='title-wrap';titleWrap.innerHTML=brandMiniSvg();
+    const label=document.createElement('span');label.className='title-text';label.textContent=loading?'思译 · 正在翻译':'思译 · 选中文字';titleWrap.append(label);
+    if(loading){const dots=document.createElement('span');dots.className='loading-dots';dots.setAttribute('aria-hidden','true');dots.innerHTML='<i></i><i></i><i></i>';titleWrap.append(dots);}
+    const closeBtn=button('×',closePanel,'close');closeBtn.setAttribute('aria-label','关闭翻译');
+    header.append(titleWrap,closeBtn);bindCardDrag(header);
     const result=document.createElement('div');result.className=`result${error?' error':''}`;result.textContent=text;result.setAttribute('aria-live','polite');
     card.append(header,result);
     if(!loading){const actions=document.createElement('div');actions.className='actions';
-      if(!error)actions.append(button('复制',()=>{navigator.clipboard.writeText(text).then(()=>{const hint=card.querySelector('.hint');if(hint)hint.textContent='已复制';}).catch(()=>{const hint=card.querySelector('.hint');if(hint)hint.textContent='浏览器未允许复制，请选中译文手动复制。';});}));
-      actions.append(button('重试',()=>void translateSelection()));card.append(actions);
-      const hint=document.createElement('div');hint.className='hint';hint.textContent=error?'原文未改动。可在扩展设置中检查配置。':'Esc 关闭 · 译文由所选模型生成';card.append(hint);
+      if(!error){
+        const copyBtn=button('复制',()=>{
+          navigator.clipboard.writeText(text).then(()=>{
+            copyBtn.textContent='已复制 ✓';copyBtn.classList.add('copied');
+            const hint=card.querySelector('.hint');if(hint)hint.textContent='已复制到剪贴板';
+            if(copyResetTimer)clearTimeout(copyResetTimer);
+            copyResetTimer=setTimeout(()=>{copyBtn.textContent='复制';copyBtn.classList.remove('copied');},1800);
+          }).catch(()=>{const hint=card.querySelector('.hint');if(hint)hint.textContent='浏览器未允许复制，请选中译文手动复制。';});
+        });
+        actions.append(copyBtn);
+      }
+      actions.append(button('重试',()=>void translateSelection()));
+      if(error)actions.append(button('打开设置',event=>{if(event.isTrusted)void message({type:'selection:settings'}).catch(()=>{});}));
+      card.append(actions);
+      const hint=document.createElement('div');hint.className='hint';hint.textContent=error?'原文未改动 · 可前往扩展设置检查配置':'拖动标题栏可移动 · Esc 关闭';card.append(hint);
     }
-    panelRoot.append(card);positionPanel();if(focused)(header.lastElementChild as HTMLButtonElement).focus({preventScroll:true});
+    panelRoot.append(card);positionPanel();if(focused)closeBtn.focus({preventScroll:true});
   }
   async function translateSelection(next?:PublicConfig){
     if(selectionTask)message({type:'task:cancel',taskId:selectionTask}).catch(()=>{});

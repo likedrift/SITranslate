@@ -20,7 +20,7 @@ async function refreshSelection(){
     error(err instanceof Error?err.message:'无法读取划词状态。');
   }
 }
-function error(text:string){el('error').textContent=text;el('error').hidden=!text;}
+function error(text:string){el('error').textContent=text;el('error').hidden=!text;el('setup-action').hidden=!/API Key/.test(text);}
 function openFold(id:string){const node=el(id) as HTMLDetailsElement;if(!node.open)node.open=true;}
 function paintStreamWarning(){
   const profile=settings?.profiles.find(p=>p.id===value('profile'));
@@ -68,6 +68,7 @@ for(const [id,action] of [['video-start','start'],['video-stop','stop'],['video-
 el('video-bilingual').addEventListener('change',()=>void videoAction('display'));
 async function action(action:string){busy=true;error('');el<HTMLButtonElement>('translate').disabled=true;try{await preferences();await rpc('tab:action',{action});await refresh();}catch(err){error(err instanceof Error?err.message:'操作失败。');}finally{busy=false;el<HTMLButtonElement>('translate').disabled=false;}}
 el('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
+el('setup-action').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 for(const [id,act]of [['translate','start'],['stop','stop'],['restore','restore'],['retry','retry']])el(id).addEventListener('click',()=>void action(act));
 document.querySelectorAll('input[name="display"]').forEach(input=>input.addEventListener('change',async()=>{try{await preferences();await rpc('tab:action',{action:'display'});}catch(err){error(err instanceof Error?err.message:'无法切换显示。');}}));
 for(const id of ['target','profile'])el(id).addEventListener('change',()=>{if(id==='profile')paintStreamWarning();preferences().catch(err=>error(err.message));});
@@ -84,8 +85,16 @@ el('grant-site').addEventListener('click',()=>{
     }catch(err){error(err instanceof Error?err.message:'无法开启划词。');}
   })();
 });
+async function paintShortcut(){
+  try{
+    const commands=await chrome.commands.getAll();
+    const key=commands.find(c=>c.name==='translate-page')?.shortcut;
+    el('shortcut-key').textContent=key||'未绑定快捷键';
+  }catch{}
+}
 async function init(){
   [currentTab]=await chrome.tabs.query({active:true,currentWindow:true});
+  void paintShortcut();
   languageOptions(el<HTMLSelectElement>('target'));settings=await rpc<Settings>('settings:get');el<HTMLSelectElement>('target').value=settings.target;
   for(const p of settings.profiles){const option=document.createElement('option');option.value=p.id;option.textContent=p.name;el('profile').append(option);}el<HTMLSelectElement>('profile').value=settings.activeProfileId;
   (document.querySelector(`input[name="display"][value="${settings.display}"]`)as HTMLInputElement).checked=true;

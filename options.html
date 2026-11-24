@@ -11,11 +11,11 @@
   <aside>
     <a class="brand brand-link" href="#providers">
       <span class="brand-mark" aria-hidden="true">
-        <svg width="22" height="22" viewBox="0 0 32 32" fill="none">
-          <rect x="4" y="4" width="16" height="16" rx="4" fill="white" fill-opacity="0.35"/>
-          <path d="M9 17L12 9L15 17M10 14.5H14" stroke="white" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+        <svg width="20" height="20" viewBox="0 0 32 32" fill="none">
+          <rect x="4" y="4" width="16" height="16" rx="4" fill="white" fill-opacity="0.32"/>
+          <path d="M9 17L12 9L15 17M10 14.5H14" stroke="white" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
           <rect x="12" y="12" width="16" height="16" rx="4" fill="white"/>
-          <path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#2563eb" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round"/>
+          <path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#1d4ed8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
         </svg>
       </span>
       <h1>思译</h1>
@@ -65,9 +65,11 @@
         </div>
         <details class="fold">
           <summary>费用估算</summary>
-          <div class="form-grid">
-            <label>输入单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="input-price" placeholder="0 表示不估算"></label>
-            <label>输出单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="output-price" placeholder="0 表示不估算"></label>
+          <div class="fold-body">
+            <div class="form-grid">
+              <label>输入单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="input-price" placeholder="0 表示不估算"></label>
+              <label>输出单价（USD / 百万 Token）<input type="number" min="0" max="10000" step="any" id="output-price" placeholder="0 表示不估算"></label>
+            </div>
           </div>
         </details>
         <div class="switch-list">
@@ -83,7 +85,12 @@
       <form id="speech-form" novalidate>
         <div class="section-heading"><h2>实时语音</h2></div>
         <div class="form-grid">
-          <label class="wide">百炼语音 API Key<input id="speech-key" type="password" autocomplete="off" maxlength="512" placeholder="与文字翻译 Key 分开保存"></label>
+          <label class="wide">百炼语音 API Key
+            <span class="input-action">
+              <input id="speech-key" type="password" autocomplete="off" maxlength="512" placeholder="与文字翻译 Key 分开保存">
+              <button class="text-button" type="button" id="toggle-speech-key" aria-label="显示语音 API Key">显示</button>
+            </span>
+          </label>
           <label>识别模型
             <input id="speech-model" list="speech-models" maxlength="100" value="qwen3-asr-flash-realtime">
             <datalist id="speech-models">
@@ -117,15 +124,17 @@
         </div>
         <details class="fold" id="speech-advanced">
           <summary>高级</summary>
-          <div class="form-grid">
-            <label>断句静默
-              <select id="speech-vad">
-                <option value="400">400 ms · 更灵敏</option>
-                <option value="600" selected>600 ms · 默认</option>
-                <option value="800">800 ms · 更稳</option>
-              </select>
-              <small id="speech-vad-help">更短更灵敏，句子更碎；更长更稳，延迟更高。</small>
-            </label>
+          <div class="fold-body">
+            <div class="form-grid">
+              <label>断句静默
+                <select id="speech-vad">
+                  <option value="400">400 ms · 更灵敏</option>
+                  <option value="600" selected>600 ms · 默认</option>
+                  <option value="800">800 ms · 更稳</option>
+                </select>
+                <small id="speech-vad-help">更短更灵敏，句子更碎；更长更稳，延迟更高。</small>
+              </label>
+            </div>
           </div>
         </details>
         <div class="row speech-actions">
