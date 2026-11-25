@@ -504,6 +504,35 @@ describe('live translation session',{concurrency:1},()=>{
       assert.equal(continued.message,'正在识别并翻译标签页声音。');
     }finally{clock.restore();}
   });
+  test('short fillers omit prior history and a context-leaking model output is retried without context',async()=>{
+    const captions:Record<string,unknown>[]=[];
+    installChrome(activeSession(),speechLocal(),captions);
+    const seen:{text:string;context:string}[]=[];
+    const translate=(input:TranslationInput,_tab:number,observer?:TranslationObserver)=>{
+      const block=input.blocks[0],text=block.segments[0].text;
+      seen.push({text,context:block.context});
+      if(text==='続きの話です。'&&block.context.length>20){
+        const leaked='前段时间在大阪城大厅第一次办了演唱会，周围的设施非常舒适宜人，休息室里还有监视器。'.repeat(4);
+        observer?.start?.(true);observer?.text?.(leaked);
+        return Promise.resolve({segments:[{id:'live',text:leaked}],cached:false,usage:{input:1,output:1,estimatedCost:0}});
+      }
+      return Promise.resolve({segments:[{id:'live',text:text==='あと。'?'还有。':'接下来的话题。'}],cached:false,usage:{input:1,output:1,estimatedCost:0}});
+    };
+    const flush=async()=>{for(let i=0;i<30;i++)await Promise.resolve();};
+    const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
+    await speech.route(transcript('hist','大阪城ホールで初めてライブをしました。'.repeat(6)),offscreen);await flush();
+    await speech.route(transcript('short','あと。'),offscreen);await flush();
+    const shortReq=seen.find(item=>item.text==='あと。');
+    assert.equal(shortReq?.context,'');
+    await speech.route(transcript('leak','続きの話です。'),offscreen);await flush();
+    const leakReqs=seen.filter(item=>item.text==='続きの話です。');
+    assert.equal(leakReqs.length,2);
+    assert.ok(leakReqs[0].context.length>20);
+    assert.equal(leakReqs[1].context,'');
+    const finalStatus=await speech.route({type:'speech:status'},ui) as {lastTranslation:string};
+    assert.equal(finalStatus.lastTranslation,'接下来的话题。');
+    assert.equal(captions.some(m=>typeof m.translation==='string'&&m.translation.includes('大阪城大厅')),false);
+  });
 });
 function speechLocal(){
   return {speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};

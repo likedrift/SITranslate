@@ -6,7 +6,7 @@ import {parseSegments} from '../src/core/validation.ts';
 import {streamSegment} from '../src/core/stream-text.ts';
 import {CompatibleAdapter, systemPrompt} from '../src/core/provider.ts';
 import {Utterances} from '../src/core/utterances.ts';
-import {LIVE_CONTEXT_CHARS, LIVE_GLOSSARY_MAX_CHARS, LIVE_GLOSSARY_MAX_ITEMS, LIVE_MAX_TOKENS_CAP, LIVE_MAX_TOKENS_FLOOR, LIVE_TERMS_PREFIX, isLiveSubtitle, liveContext, liveGlossary, liveJsonInstruction, liveMaxTokens} from '../src/core/live-translate.ts';
+import {LIVE_CONTEXT_CHARS, LIVE_GLOSSARY_MAX_CHARS, LIVE_GLOSSARY_MAX_ITEMS, LIVE_MAX_TOKENS_CAP, LIVE_MAX_TOKENS_FLOOR, LIVE_TERMS_PREFIX, isLiveContextLeak, isLiveSubtitle, liveContext, liveGlossary, liveJsonInstruction, liveMaxTokens, liveRequestContext} from '../src/core/live-translate.ts';
 import {validateInput} from '../src/core/validation.ts';
 import {cacheKey} from '../src/core/cache.ts';
 
@@ -232,4 +232,16 @@ test('glossary changes the live cache key and cannot exceed the prompt cap', asy
   assert.equal(await cacheKey(profile, {...pageInput, glossary: '山田太郎'}), await cacheKey(profile, pageInput));
   assert.doesNotThrow(() => validateInput({...base, glossary: 'あ'.repeat(LIVE_GLOSSARY_MAX_CHARS)}));
   assert.throws(() => validateInput({...base, glossary: 'あ'.repeat(LIVE_GLOSSARY_MAX_CHARS + 1)}), /翻译请求无效/);
+});
+
+test('short filler lines omit long prior context and leaked history translations are detected', () => {
+  const history = '大阪城ホールでライブをしました。'.repeat(12);
+  assert.equal(liveRequestContext(history, 'あと。'), '');
+  assert.equal(liveRequestContext(history, '네.'), '');
+  assert.equal(liveRequestContext(history, 'はい。'), '');
+  assert.equal(liveRequestContext(history, '今日のライブはとても楽しかったです。').length > 100, true);
+  assert.equal(isLiveContextLeak('あと。', '还有。', history, 'zh-Hans'), false);
+  assert.equal(isLiveContextLeak('今日の話です。', '这是关于今天的话题，大家一起来听听吧。', history, 'zh-Hans'), false);
+  assert.equal(isLiveContextLeak('今日の話です。', '啊。前几天在大阪城大厅办了演唱会。'.repeat(8), history, 'zh-Hans'), true);
+  assert.equal(isLiveContextLeak('今日の話です。', '啊。前几天在大阪城大厅办了演唱会。'.repeat(8), '', 'zh-Hans'), false);
 });

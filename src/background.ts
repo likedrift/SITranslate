@@ -8,7 +8,7 @@ import {createSpeechController} from './speech-background';
 import {isYouTubePage,type PlayerState} from './core/player';
 import {DEFAULT_CAPTION,captionGeometryPatch,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
 import {streamSegment} from './core/stream-text';
-import {isLiveSubtitle} from './core/live-translate';
+import {isLiveSubtitle,liveMaxTranslationChars,LIVE_LEAK_CONTEXT_MIN_CHARS} from './core/live-translate';
 
 const scheduler=new Scheduler(2),cache=new TranslationCache();
 const sharedRequests=new SharedWork<TranslationResult>();
@@ -106,7 +106,7 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       const flushProgress=()=>{clearProgress();if(networkSignal.aborted||!pendingText||pendingText===lastText)return;lastProgress=Date.now();lastText=pendingText;observer?.text?.(pendingText);};
       networkSignal.addEventListener('abort',clearProgress,{once:true});
       const progress=(raw:string)=>{
-        if(observer&&!networkSignal.aborted){if(!firstToken&&raw){firstToken=true;observer.token?.();}const source=networkInput.blocks[0]?.segments[0];if(networkInput.blocks.length===1&&networkInput.blocks[0].segments.length===1&&source){const text=streamSegment(raw,source.id,Math.max(500,source.text.length*12));if(text&&text!==lastText){pendingText=text;const wait=80-(Date.now()-lastProgress);if(wait<=0)flushProgress();else if(!progressTimer)progressTimer=setTimeout(flushProgress,wait);}}return;}
+        if(observer&&!networkSignal.aborted){if(!firstToken&&raw){firstToken=true;observer.token?.();}const source=networkInput.blocks[0]?.segments[0];if(networkInput.blocks.length===1&&networkInput.blocks[0].segments.length===1&&source){const hasLongContext=Array.from(networkInput.blocks[0].context.trim()).length>=LIVE_LEAK_CONTEXT_MIN_CHARS;const limit=isLiveSubtitle(input)&&hasLongContext?liveMaxTranslationChars(source.text,input.target):Math.max(500,source.text.length*12);const text=streamSegment(raw,source.id,limit);if(text&&text!==lastText){pendingText=text;const wait=80-(Date.now()-lastProgress);if(wait<=0)flushProgress();else if(!progressTimer)progressTimer=setTimeout(flushProgress,wait);}}return;}
         // A validated prefix is only for the one plain-text selection preview; final result is still fully validated.
         if(input.kind!=='selection'||!profile.stream||Date.now()-lastProgress<100)return;
         const match=raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);if(!match)return;

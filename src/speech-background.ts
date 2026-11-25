@@ -3,7 +3,7 @@ import {liveInterruptHint} from './core/live-hints';
 import type {PublicConfig,TranslationInput,TranslationResult,TranslationObserver} from './core/types';
 import {Utterances,enqueuePiece,LIVE_QUEUE_LIMIT,pieceParts,pieceTraceIds,type SpeechPiece} from './core/utterances';
 import {SpeechDiagnostics,diagnosticSettings,type SpeechTrace} from './core/speech-diagnostics';
-import {liveContext,liveGlossary} from './core/live-translate';
+import {liveContext,liveGlossary,liveRequestContext,isLiveContextLeak} from './core/live-translate';
 import {RateLimitError} from './core/provider';
 import {rateLimitBackoffMs} from './core/rate-limit';
 const SKIP_AFTER_MS=12000,EXPIRE_AFTER_MS=15000,TRANSLATION_TIMEOUT_MS=12000;
@@ -87,24 +87,33 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     const timeout=setTimeout(()=>{if(run===epoch){deps.cancel(`subtitle-live-${sessionId}`);note({outcome:'failed'});for(const queued of queue)for(const id of pieceTraceIds(queued))diagnostics.update(id,{outcome:'skipped'});epoch++;queue=[];busy=false;inflight=undefined;void caption({failed:true,pieceId:item.id,version:requestId});state.message='文字翻译超时，已跳过，继续识别。';void persist(true);}},TRANSLATION_TIMEOUT_MS);
     const unchanged=()=>parts.every(part=>latest.get(part.id)===part.text);
     const valid=()=>run===epoch&&state.state==='active'&&unchanged()&&item.order>=shownOrder;
+    const reqContext=liveRequestContext(item.context??'',item.text);
     try{
-      const result=await deps.translate({kind:'subtitle',taskId:`subtitle-live-${sessionId}`,requestId,profileId:config.profileId,target:config.target,blocks:[{id:'live',context:item.context??'',segments:[{id:'live',text:item.text}]}],...(speechGlossary?{glossary:speechGlossary}:{})},tabId,{
+      let result=await deps.translate({kind:'subtitle',taskId:`subtitle-live-${sessionId}`,requestId,profileId:config.profileId,target:config.target,blocks:[{id:'live',context:reqContext,segments:[{id:'live',text:item.text}]}],...(speechGlossary?{glossary:speechGlossary}:{})},tabId,{
         start:streaming=>{networkAt=Date.now();note({schedulerMs:networkAt-started,streaming});},
         token:()=>note({firstTokenMs:Date.now()-networkAt}),
-        text:text=>{if(!valid())return;if(!firstTextAt){firstTextAt=Date.now();note({firstTextMs:firstTextAt-networkAt});}void caption({source:item.text,translation:text,pieceId:item.id,version:requestId,traceId,sourceEndAt:item.sourceEndAt,partial:true});}
+        text:text=>{if(!valid())return;if(isLiveContextLeak(item.text,text,reqContext,config.target))return;if(!firstTextAt){firstTextAt=Date.now();note({firstTextMs:firstTextAt-networkAt});}void caption({source:item.text,translation:text,pieceId:item.id,version:requestId,traceId,sourceEndAt:item.sourceEndAt,partial:true});}
       });
       if(run!==epoch||state.state!=='active')return;
+      if(isLiveContextLeak(item.text,result.segments[0].text,reqContext,config.target)){
+        // Model echoed prior block.context into segments[].text; withdraw provisional text and retry cleanly without context.
+        void caption({failed:true,pieceId:item.id,version:requestId});
+        const retryRequestId=crypto.randomUUID();
+        inflight={id:item.id,version:retryRequestId,traceId,traceIds:traces};
+        result=await deps.translate({kind:'subtitle',taskId:`subtitle-live-${sessionId}`,requestId:retryRequestId,profileId:config.profileId,target:config.target,blocks:[{id:'live',context:'',segments:[{id:'live',text:item.text}]}],...(speechGlossary?{glossary:speechGlossary}:{})},tabId);
+        if(run!==epoch||state.state!=='active')return;
+      }
       // The provisional caption is already on screen. Dropping the late result without a failure leaves the reader on “生成中”.
-      if(Date.now()-item.at>EXPIRE_AFTER_MS){for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});state.message='翻译跟不上语速，已跳过过期片段。';void persist();return;}
+      if(Date.now()-item.at>EXPIRE_AFTER_MS){for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:inflight?.version??requestId});state.message='翻译跟不上语速，已跳过过期片段。';void persist();return;}
       for(const part of parts)if(latest.has(part.id))translatedPieces.set(part.id,part.text);
-      if(!valid()){note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:requestId});return;}
+      if(!valid()){note({outcome:'stale'});void caption({failed:true,pieceId:item.id,version:inflight?.version??requestId});return;}
       for(const part of parts)utterances.confirm(part.id,part.text);
       shownOrder=item.order;
       rateLimitStreak=0;
       state.lastTranslation=result.segments[0].text;state.completed++;state.message='正在识别并翻译标签页声音。';
       const done=Date.now();note({outcome:'completed',translationMs:done-networkAt,cache:result.cached,...(!firstTextAt?{firstTextMs:done-networkAt}:{})});diagnostics.update(traceId,{targetChars:state.lastTranslation.length});
       state.timing={queueMs,translationMs:done-networkAt,textToCaptionMs:done-item.at};
-      await caption({source:item.text,translation:state.lastTranslation,pieceId:item.id,version:requestId,traceId,sourceEndAt:item.sourceEndAt});await persist();
+      await caption({source:item.text,translation:state.lastTranslation,pieceId:item.id,version:inflight?.version??requestId,traceId,sourceEndAt:item.sourceEndAt});await persist();
     }catch(error){
       clearTimeout(timeout);
       if(run!==epoch)return;
