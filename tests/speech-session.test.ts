@@ -6,6 +6,7 @@ import {LIVE_CONTEXT_CHARS, liveGlossary} from '../src/core/live-translate.ts';
 import {systemPrompt} from '../src/core/provider.ts';
 import {DEFAULT_SPEECH,IDLE_SPEECH} from '../src/core/speech.ts';
 import {LiveReader} from '../src/core/live-reader.ts';
+import {UTTERANCE_TAIL_HOLD_MS} from '../src/core/utterances.ts';
 import type {TranslationInput,TranslationObserver,TranslationResult} from '../src/core/types.ts';
 
 const extension='chrome-extension://ext/';
@@ -33,11 +34,11 @@ describe('live translation session',{concurrency:1},()=>{
   test('a completed timed prefix is never retranslated or merged into its later suffix',async()=>{
     const captions:Record<string,unknown>[]=[],jobs:Promise<unknown>[]=[],seen:string[]=[];
     installChrome(activeSession(),speechLocal(),captions);const clock=installClock(1_700_000_000_000),hold=deferred();
-    const prefix='検証の前半の紹介を始めます',suffix='検証の後半も説明します。';
+    const prefix='検証の前半の紹介を詳しく始めます',suffix='検証の後半も説明します。';
     const translate=translating(seen,jobs,async index=>{if(index===2)await hold.promise;});
     const speech=createSpeechController({ready:Promise.resolve(),config:async()=>activeSession().speechConfig as never,translate,cancel(){}});
     try{
-      await speech.route({...transcript('growing',prefix),final:false},offscreen);clock.advance(800);await drain(jobs);
+      await speech.route({...transcript('growing',prefix),final:false},offscreen);clock.advance(UTTERANCE_TAIL_HOLD_MS);await drain(jobs);
       assert.deepEqual(seen,[prefix]);
       await speech.route(transcript('hold','別の発言。'),offscreen);
       await speech.route(transcript('growing',prefix+suffix),offscreen);
@@ -129,7 +130,7 @@ describe('live translation session',{concurrency:1},()=>{
     const report=await speech.route({type:'speech:diagnostics'},ui) as {policy:{silenceDurationMs:number}};
     assert.equal(report.policy.silenceDurationMs,600);
   });
-  test('A long enough unfinished tail flushes at 800 ms without waiting for the next speech:health',async()=>{
+  test('A long enough unfinished tail flushes after the hold window without waiting for the next speech:health',async()=>{
     const captions:Record<string,unknown>[]=[],session=activeSession();
     const local={speechSettings:{...DEFAULT_SPEECH,apiKey:'secret-speech-key'},settings:{version:1,activeProfileId:'p',target:'zh-Hans',profiles:[{id:'p',model:'deepseek-flash',stream:true}]},captionLayout:{readingMode:'balanced'}};
     installChrome(session,local,captions);
@@ -142,7 +143,7 @@ describe('live translation session',{concurrency:1},()=>{
     const settled=async()=>{await Promise.all(jobs.splice(0));for(let i=0;i<20;i++)await Promise.resolve();};
     try{
       const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
-      const tail='あいうえおかきくけこさし';
+      const tail='あいうえおかきくけこさしすせそた';
       const send=(text:string,itemId:string,at=clock.now())=>speech.route({type:'speech:transcript',sessionId:'sess',itemId,text,preview:'',final:false,receivedAt:at},offscreen);
       await send('今日は晴れです。','punct');
       assert.equal(jobs.length,1);
@@ -150,24 +151,24 @@ describe('live translation session',{concurrency:1},()=>{
       const started=clock.now();
       await send(tail,'tail',started);
       assert.equal(jobs.length,0);
-      clock.advance(799);
+      clock.advance(UTTERANCE_TAIL_HOLD_MS-1);
       assert.equal(jobs.length,0);
       clock.advance(1);
       assert.equal(jobs.length,1);
       await settled();
       const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
-      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,800);
+      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,UTTERANCE_TAIL_HOLD_MS);
       const again=clock.now();
-      await send(tail+'す','slide',again);
+      await send(tail+'ち','slide',again);
       clock.advance(400);
-      await send(tail+'すせ','slide',clock.now());
-      clock.advance(399);
+      await send(tail+'ちつ','slide',clock.now());
+      clock.advance(UTTERANCE_TAIL_HOLD_MS-401);
       assert.equal(jobs.length,0);
       clock.advance(1);
       assert.equal(jobs.length,1);
       await settled();
       const slid=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
-      assert.equal(slid.rows.find(row=>row.sourceChars===(tail+'すせ').length)?.commitMs,400);
+      assert.equal(slid.rows.find(row=>row.sourceChars===(tail+'ちつ').length)?.commitMs,UTTERANCE_TAIL_HOLD_MS-400);
       await send('あいうえお','short');
       clock.advance(5000);
       await speech.route({type:'speech:health',sessionId:'sess',seconds:9,sentBytes:9000,hasAudio:true},offscreen);
@@ -186,15 +187,15 @@ describe('live translation session',{concurrency:1},()=>{
     };
     try{
       const speech=createSpeechController({ready:Promise.resolve(),config:async()=>session.speechConfig as never,translate,cancel(){}});
-      const tail='あいうえおかきくけこさし',started=clock.now();
+      const tail='あいうえおかきくけこさしすせそた',started=clock.now();
       await speech.route({type:'speech:transcript',sessionId:'sess',itemId:'held',text:tail,preview:'',final:false,receivedAt:started},offscreen);
-      clock.advance(800,false);
+      clock.advance(UTTERANCE_TAIL_HOLD_MS,false);
       assert.equal(jobs.length,0);
       await speech.route({type:'speech:health',sessionId:'sess',seconds:4,sentBytes:4000,hasAudio:true},offscreen);
       assert.equal(jobs.length,1);
       await Promise.all(jobs.splice(0));
       const report=await speech.route({type:'speech:diagnostics'},ui) as {rows:{sourceChars:number;commitMs?:number}[]};
-      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,800);
+      assert.equal(report.rows.find(row=>row.sourceChars===tail.length)?.commitMs,UTTERANCE_TAIL_HOLD_MS);
     }finally{clock.restore();}
   });
   test('live requests keep at most 300 characters of prior transcript',async()=>{

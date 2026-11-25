@@ -1,5 +1,5 @@
 export interface LiveCaption {id:string;version:string;source:string;text:string;final:boolean;streamed?:boolean;traceId?:string;sourceEndAt?:number;arrivedAt:number}
-export const readingMs=(text:string)=>Math.min(6000,Math.max(1500,900+Array.from(text).length*90));
+export const readingMs=(text:string)=>Math.min(6000,Math.max(1800,1100+Array.from(text).length*95));
 // Bounded reading buffer; no audio, DOM or timers. The page owns its existing refresh timer.
 export class LiveReader {
   private confirmed=new Map<string,LiveCaption>();
@@ -21,12 +21,16 @@ export class LiveReader {
   tick(now:number,mode='balanced'){
     const current=this.current;if(!current||this.paused||!current.final||!this.pending)return;
     const i=this.items.findIndex(c=>c.id===current.id);
-    while(this.pending>1&&now-this.items[i+1].arrivedAt>4000)this.dropped.push(...this.items.splice(i+1,1));
+    while(this.pending>1&&now-this.items[i+1].arrivedAt>4500)this.dropped.push(...this.items.splice(i+1,1));
     const next=this.items[i+1];if(!next)return;
-    // Preserve reading time for complete cues, but expose a real stream promptly.
-    // The prior completed cue remains visible above the current one.
-    const deadline=Math.min(Math.max(this.shownAt+readingMs(current.text),this.finalAt+800),next.arrivedAt+(next.streamed?200:2500));
-    if(mode!=='live'&&now<deadline)return;this.show(next,now);
+    if(mode==='live'){this.show(next,now);return;}
+    // Preserve comfortable reading time in balanced mode instead of cutting off after 200 ms on streamed arrival.
+    // Accelerate moderately only when multiple sentences queue up behind the current caption.
+    const readUntil=Math.max(this.shownAt+readingMs(current.text),this.finalAt+1200);
+    const maxWait=this.pending>=2?1400:2800;
+    const deadline=Math.min(readUntil,next.arrivedAt+maxWait);
+    if(now<deadline)return;
+    this.show(next,now);
   }
   private show(cue:LiveCaption,now:number){this.currentId=cue.id;this.shownAt=now;this.finalAt=cue.final?now:0;}
   back(now:number){const i=this.items.findIndex(c=>c.id===this.currentId);if(i>0){this.paused=true;this.show(this.items[i-1],now);}}

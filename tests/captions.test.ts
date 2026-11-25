@@ -1,7 +1,7 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
 import {DEFAULT_CAPTION,migrateCaption,normalizeCaption,validateCaption,captionBounds,captionChrome,captionGeometryPatch,captionGestureLayout,captionPages,resizeCaptionBox,scaleCaptionFont,type CaptionCorner} from '../src/core/caption-layout.ts';
 import {NO_VIDEO_CAPTION_MESSAGE} from '../src/core/types.ts';
-import {Utterances,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
+import {Utterances,UTTERANCE_TAIL_CHARS,UTTERANCE_TAIL_HOLD_MS,enqueuePiece,type SpeechPiece} from '../src/core/utterances.ts';
 import {YouTubeCaptionTracker} from '../src/core/subtitles.ts';
 test('Caption original display migrates once onto showOriginal',()=>{
   const legacy={...DEFAULT_CAPTION,fontSize:30,showOriginal:undefined,bilingual:false};
@@ -82,23 +82,37 @@ test('Growing utterance translates completed prefixes once and emits only the ne
   assert.deepEqual(u.update('one','今日は晴れです。次に番組を紹介します。',true,300),[]);
   assert.deepEqual(u.update('one','古い途中結果',false,400),[]);
 });
-test('Long unpunctuated Japanese is bounded and confirmed tails flush after 800 ms',()=>{
+test('Long unpunctuated Japanese is bounded and confirmed tails flush after hold window',()=>{
   const u=new Utterances(),text='あいうえおかきくけこ'.repeat(13),a=u.update('one',text,false,0);assert.ok(a.length>=2);assert.ok(a.every(p=>Array.from(p.text).length<=48));
-  assert.deepEqual(u.flush(799),[]);const b=u.flush(800);assert.equal(a.map(p=>p.text).join('')+b.map(p=>p.text).join(''),text);assert.deepEqual(u.flush(3000),[]);
+  assert.deepEqual(u.flush(UTTERANCE_TAIL_HOLD_MS-1),[]);const b=u.flush(UTTERANCE_TAIL_HOLD_MS);assert.equal(a.map(p=>p.text).join('')+b.map(p=>p.text).join(''),text);assert.deepEqual(u.flush(UTTERANCE_TAIL_HOLD_MS+2200),[]);
 });
-test('Unfinished tails are due 800 ms after the last commit and later partials do not move that time',()=>{
-  const u=new Utterances(),tail='あいうえおかきくけこさし';
-  assert.equal(tail.length,12);
+test('Unfinished tails flush at natural boundaries without splitting words or dangling clauses',()=>{
+  const u=new Utterances(),tail='あいうえおかきくけこさしすせそた';
+  assert.equal(tail.length,UTTERANCE_TAIL_CHARS);
   assert.deepEqual(u.update('one',tail,false,0),[]);
-  assert.equal(u.nextTailFlushAt(),800);
-  assert.deepEqual(u.update('one',tail+'すせ',false,400),[]);
-  assert.equal(u.nextTailFlushAt(),800);
-  assert.deepEqual(u.flush(799),[]);
-  assert.deepEqual(u.flush(800).map(p=>p.text),[tail+'すせ']);
+  assert.equal(u.nextTailFlushAt(),UTTERANCE_TAIL_HOLD_MS);
+  assert.deepEqual(u.update('one',tail+'ちつ',false,400),[]);
+  assert.equal(u.nextTailFlushAt(),UTTERANCE_TAIL_HOLD_MS);
+  assert.deepEqual(u.flush(UTTERANCE_TAIL_HOLD_MS-1),[]);
+  assert.deepEqual(u.flush(UTTERANCE_TAIL_HOLD_MS).map(p=>p.text),[tail+'ちつ']);
   assert.equal(u.nextTailFlushAt(),undefined);
+  // Natural comma boundary holds the trailing stub for the next caption.
+  const comma=new Utterances();
+  comma.update('c','今日は新しいゲームについて、これか',false,0);
+  const flushed=comma.flush(UTTERANCE_TAIL_HOLD_MS);
+  assert.deepEqual(flushed.map(p=>p.text),['今日は新しいゲームについて、']);
+  comma.confirm(flushed[0].id,flushed[0].text);
+  const rest=comma.update('c','今日は新しいゲームについて、これから紹介します。',true,2000);
+  assert.deepEqual(rest.map(p=>p.text),['これから紹介します。']);
+  // English long captions never split inside a word and keep natural phrase length.
+  const en=new Utterances();
+  const sentence='Today we are going to walk through how real time translation handles longer English spoken sentences without cutting every five words.';
+  const enPieces=en.update('en',sentence,true,0);
+  assert.ok(enPieces.length<=2);
+  assert.ok(enPieces.every(p=>!p.text.endsWith('-')&&!/[A-Za-z]$/.test(p.text)||sentence.includes(p.text+' ')||sentence.endsWith(p.text)));
   const held=new Utterances(),prefixed=held.update('two','今日は晴れです。'+tail,false,1000);
   assert.deepEqual(prefixed.map(p=>p.text),['今日は晴れです。']);
-  assert.equal(held.nextTailFlushAt(),1800);
+  assert.equal(held.nextTailFlushAt(),1000+UTTERANCE_TAIL_HOLD_MS);
   const short=new Utterances();short.update('three','あいうえお',false,0);assert.equal(short.nextTailFlushAt(),undefined);
   const done=new Utterances();done.update('four','今日は晴れです。',false,0);assert.equal(done.nextTailFlushAt(),undefined);
 });

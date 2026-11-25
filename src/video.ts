@@ -150,7 +150,7 @@ function boot(){
     const texts=liveSession?(active?.text??''):ytDisplay?ytDisplay.translation:current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
     if(drag&&drag.full!==!!full)finishGesture(true);
     const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.minHeight=bounds.height?`${Math.min(bounds.height,bounds.areaHeight)}px`:'';card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(16,20,28,${layout.opacity})`;card.classList.toggle('locked',layout.locked);card.classList.toggle('moving',!!drag?.moved);card.tabIndex=layout.locked?-1:0;
-    const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*2),targets=captionPages(texts,limit),sources=captionPages(layout.showOriginal||!texts?source:'',Math.floor(limit/ .78));
+    const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*3),targets=captionPages(texts,limit),sources=captionPages(layout.showOriginal||!texts?source:'',Math.floor(limit/ .78));
     pageCount=Math.max(targets.length,sources.length);const key=(liveSession?active?.id??'preview':source+'\0'+texts)+'\0'+limit;
     if(key!==pageKey){pageKey=key;pageIndex=0;pageAt=Date.now();}
     if(liveSession&&active&&!active.final&&!reader.paused&&!drag){pageIndex=pageCount-1;pageAt=Date.now();}
@@ -158,7 +158,8 @@ function boot(){
     pageIndex=Math.min(pageIndex,pageCount-1);original.textContent=sources[Math.min(sources.length-1,Math.floor(pageIndex*sources.length/pageCount))];translated.textContent=targets[Math.min(targets.length-1,Math.floor(pageIndex*targets.length/pageCount))];
     const chrome=captionChrome(menuOpen,!!liveSession,pageCount);menuOpen=chrome.menu;menuToggle.hidden=!chrome.toggle;menuToggle.setAttribute('aria-expanded',chrome.menu?'true':'false');menu.hidden=!chrome.menu;pager.hidden=!chrome.pager;liveTools.hidden=!chrome.tools;pager.children[1].textContent=`${pageIndex+1} / ${pageCount}`;
     if(liveSession){
-      if(!reader.paused&&layout.showOriginal&&livePreview&&livePreview!==source)original.textContent='识别中：'+captionPages(livePreview,Math.floor(limit/.78)).at(-1);
+      // Only show incoming ASR draft when waiting for the first translation; keep source aligned with the visible translation.
+      if(!reader.paused&&layout.showOriginal&&livePreview&&(!active||(!active.text&&!active.final)))original.textContent='识别中：'+captionPages(livePreview,Math.floor(limit/.78)).at(-1);
       const previous=reader.previous;previousLine!.hidden=!previous;previousLine!.textContent=previous?'上一条：'+captionPages(previous.text,limit).at(-1):'';
       holdButton!.textContent=reader.paused?'继续字幕':'暂停字幕滚动';liveHint!.textContent=[active&&!active.final?'生成中':'',reader.paused?'已暂停':reader.pending?`待显示 ${reader.pending}`:''].filter(Boolean).join(' · ');
     }

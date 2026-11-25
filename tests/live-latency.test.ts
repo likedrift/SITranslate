@@ -13,20 +13,28 @@ test('Progress never treats reasoning, wrong segment IDs, scaffolding or oversiz
 });
 const cue=(id:string,text=id,final=true,at=0):LiveCaption=>({id,version:id,source:'source',text,final,arrivedAt:at,traceId:id});
 test('Reading buffer gives the current caption time, then retains its completed predecessor',()=>{
-  const r=new LiveReader();r.receive(cue('one','第一句字幕。'),0);r.receive(cue('two','第二句字幕。'),100);assert.equal(r.current?.id,'one');r.tick(1499);assert.equal(r.current?.id,'one');r.tick(readingMs('第一句字幕。'));assert.equal(r.current?.id,'two');assert.equal(r.previous?.id,'one');
+  const r=new LiveReader();r.receive(cue('one','第一句字幕。'),0);r.receive(cue('two','第二句字幕。'),100);assert.equal(r.current?.id,'one');r.tick(readingMs('第一句字幕。')-1);assert.equal(r.current?.id,'one');r.tick(readingMs('第一句字幕。'));assert.equal(r.current?.id,'two');assert.equal(r.previous?.id,'one');
 });
-test('Balanced mode exposes the next real stream within 200 ms and still honors paused review',()=>{
-  const r=new LiveReader();r.receive(cue('old','长'.repeat(80)),0);
-  r.receive(cue('next','开',false,100),100);r.tick(299);assert.equal(r.current?.id,'old');
-  r.tick(300);assert.equal(r.current?.text,'开');assert.equal(r.previous?.id,'old');
-  r.receive(cue('next','开始流式翻译',false,350),350);assert.equal(r.current?.text,'开始流式翻译');
-  r.receive(cue('next','开始流式翻译。',true,400),400);r.paused=true;
-  r.receive(cue('third','新',false,500),500);r.tick(5000);assert.equal(r.current?.id,'next');
-  const fast=new LiveReader();fast.receive(cue('old','长'.repeat(80)),0);fast.receive(cue('new','新',false,100),100);
-  fast.receive(cue('new','新的完整译文',true,150),150);fast.tick(300);assert.equal(fast.current?.id,'new');
+test('Balanced mode protects reading time even when the next caption streams, while live mode advances immediately',()=>{
+  const r=new LiveReader();r.receive(cue('old','第一句完整译文需要看完。'),0);
+  r.receive(cue('next','开',false,100),100);
+  // 200 ms after streamed arrival must NOT cut off the current readable caption in balanced mode.
+  r.tick(300);assert.equal(r.current?.id,'old');
+  r.receive(cue('next','开始流式翻译。',true,400),400);
+  r.tick(readingMs('第一句完整译文需要看完。')-1);assert.equal(r.current?.id,'old');
+  r.tick(readingMs('第一句完整译文需要看完。'));assert.equal(r.current?.text,'开始流式翻译。');assert.equal(r.previous?.id,'old');
+  r.paused=true;r.receive(cue('third','新',false,2600),2600);r.tick(9000);assert.equal(r.current?.id,'next');
+  // Backlog >= 2 accelerates moderately (1400 ms) so live speech does not fall far behind.
+  const busy=new LiveReader();busy.receive(cue('old','长'.repeat(80)),0);
+  busy.receive(cue('q1','第一条排队。',true,100),100);busy.receive(cue('q2','第二条排队。',true,200),200);
+  busy.tick(1499);assert.equal(busy.current?.id,'old');
+  busy.tick(1500);assert.equal(busy.current?.id,'q1');
+  // Live mode switches immediately on streamed first token.
+  const live=new LiveReader();live.receive(cue('old','长'.repeat(80)),0,'live');
+  live.receive(cue('next','开',false,100),100,'live');assert.equal(live.current?.text,'开');assert.equal(live.previous?.id,'old');
 });
 test('Stream updates extend one caption, final text gets a reading grace, and explicit live mode has no buffer delay',()=>{
-  const r=new LiveReader();r.receive(cue('one','半',false,0),0);r.receive(cue('one','半句话',false,100),100);assert.equal(r.items.length,1);assert.equal(r.current?.arrivedAt,0);r.receive(cue('one','完整的一句话',true,700),700);r.receive(cue('two'),800);r.tick(1000);assert.equal(r.current?.id,'one');r.tick(1500);assert.equal(r.current?.id,'two');r.receive(cue('three'),1600,'live');assert.equal(r.current?.id,'three');
+  const r=new LiveReader();r.receive(cue('one','半',false,0),0);r.receive(cue('one','半句话',false,100),100);assert.equal(r.items.length,1);assert.equal(r.current?.arrivedAt,0);r.receive(cue('one','完整的一句话',true,700),700);r.receive(cue('two'),800);r.tick(1899);assert.equal(r.current?.id,'one');r.tick(1900);assert.equal(r.current?.id,'two');r.receive(cue('three'),2000,'live');assert.equal(r.current?.id,'three');
 });
 test('Pause and review never stop incoming translations or allow unbounded history / pending captions',()=>{
   const r=new LiveReader();r.receive(cue('0'),0);r.paused=true;for(let i=1;i<30;i++)r.receive(cue(String(i)),i);assert.equal(r.current?.id,'0');assert.ok(r.items.length<=8);assert.equal(r.pending,3);assert.ok(r.dropped.length>0);r.latest(10000);assert.equal(r.current?.id,'29');r.back(10001);assert.equal(r.current?.id,'28');assert.ok(r.paused);r.forward(10002);assert.equal(r.current?.id,'29');
@@ -36,7 +44,7 @@ test('Rejected provisional text is withdrawn while the previous completed transl
   r.receive({...cue('good','failed revision',false),version:'revision'},2200);r.withdraw('good','revision',2300);assert.equal(r.current?.text,'good');assert.equal(r.current?.final,true);
 });
 test('Reading grace is bounded and stale pending captions cannot turn into a long live backlog',()=>{
-  const r=new LiveReader();r.receive(cue('one','长'.repeat(100)),0);r.receive(cue('two','second',true,100),100);r.tick(2599);assert.equal(r.current?.id,'one');r.tick(2600);assert.equal(r.current?.id,'two');
+  const r=new LiveReader();r.receive(cue('one','长'.repeat(100)),0);r.receive(cue('two','second',true,100),100);r.tick(2899);assert.equal(r.current?.id,'one');r.tick(2900);assert.equal(r.current?.id,'two');
   const delayed=new LiveReader();delayed.receive(cue('current','长'.repeat(100)),0);delayed.paused=true;delayed.receive(cue('old','old',true,100),100);delayed.receive(cue('fresh','fresh',true,5000),5000);delayed.paused=false;delayed.tick(6000);assert.equal(delayed.current?.id,'fresh');assert.ok(delayed.dropped.some(c=>c.id==='old'));
 });
 test('ASR clock maps server timestamps to uploaded audio metadata and resets at reconnect',()=>{

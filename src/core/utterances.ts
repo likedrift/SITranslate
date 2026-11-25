@@ -5,9 +5,46 @@ interface Item {text:string;final:boolean;lastAt:number;emitted:Emitted[];base:n
 interface Chunk {text:string;complete:boolean;end:number}
 // Confirmed prefixes only. Draft suffixes never trigger translation.
 export const UTTERANCE_CHUNK_CHARS=36;
-export const UTTERANCE_TAIL_CHARS=12;
-export const UTTERANCE_TAIL_HOLD_MS=800;
+export const UTTERANCE_TAIL_CHARS=16;
+export const UTTERANCE_TAIL_HOLD_MS=1400;
 export const UTTERANCE_ITEM_LIMIT=32;
+
+const CLAUSE_ENDINGS=['でした','ました','けれど','だけど','です','ます','けど','から','ので','って','ない','ね','よ'];
+const DANGLE_PARTICLES=/[のをにがはとでへやも]$/;
+const LATIN_WORD=/[A-Za-z0-9]/;
+const SOFT_PUNCT=/[、，,；;：:\s]/;
+
+function charWeight(c:string){return c.charCodeAt(0)<128?0.5:1;}
+function weightedLength(chars:string[],from=0,to=chars.length){
+  let sum=0;for(let i=from;i<to;i++)sum+=charWeight(chars[i]);return sum;
+}
+function trimIncompleteTail(chars:string[],start:number,end:number,minWeighted:number){
+  let cut=end;
+  // Never split inside an ASCII/English word.
+  if(cut<chars.length&&LATIN_WORD.test(chars[cut-1])&&LATIN_WORD.test(chars[cut])){
+    let back=cut;
+    while(back>start&&LATIN_WORD.test(chars[back-1]))back--;
+    if(weightedLength(chars,start,back)>=minWeighted)cut=back;
+  }
+  // Avoid leaving a dangling Japanese particle at the cut boundary.
+  while(cut>start&&DANGLE_PARTICLES.test(chars[cut-1])&&weightedLength(chars,start,cut-1)>=minWeighted)cut--;
+  return cut;
+}
+function findNaturalBreak(chars:string[],start:number,end:number,minWeighted:number){
+  for(let i=end;i>start;i--){
+    if(SOFT_PUNCT.test(chars[i-1])&&weightedLength(chars,start,i)>=minWeighted)return i;
+  }
+  const slice=chars.slice(start,end).join('');
+  for(let i=end;i>start;i--){
+    if(weightedLength(chars,start,i)<minWeighted)break;
+    const prefix=slice.slice(0,i-start);
+    const next=chars[i]??'';
+    if(/[かよねっ]|けど/.test(next))continue;
+    if(CLAUSE_ENDINGS.some(ending=>prefix.endsWith(ending)))return i;
+  }
+  return -1;
+}
+
 export class Utterances {
   private items=new Map<string,Item>();private order=0;
   reset(){this.items.clear();this.order=0;}
@@ -47,17 +84,26 @@ export class Utterances {
   private tailHoldUntil(item:Item){
     const chars=Array.from(item.text),offset=afterPunctuation(chars,item.emitted.at(-1)?.end??0);
     for(const c of this.chunks(chars.slice(offset).join(''))){
-      if(!hasWords(c.text)||c.complete||Array.from(c.text).length<UTTERANCE_TAIL_CHARS)continue;
+      if(!hasWords(c.text)||c.complete||weightedLength(Array.from(c.text))<UTTERANCE_TAIL_CHARS)continue;
       return item.lastAt+UTTERANCE_TAIL_HOLD_MS;
     }
     return undefined;
   }
   private chunks(text:string){
     const chars=Array.from(text),chunks:Chunk[]=[];let start=0;
-    while(start<chars.length){let end=start,complete=false;
-      while(end<chars.length&&end-start<UTTERANCE_CHUNK_CHARS){const c=chars[end++];if(/[。！？!?]/.test(c)||c==='.'&&(!chars[end]||/\s/.test(chars[end]))){while(end<chars.length&&end-start<UTTERANCE_CHUNK_CHARS&&/[」』）”’]/.test(chars[end]))end++;complete=true;break;}}
-      if(!complete&&end<chars.length){let boundary=-1;for(let i=end;i>start+16;i--)if(/[、，,；;\s]/.test(chars[i-1])){boundary=i;break;}
-        if(boundary>start)end=boundary;else {while(end>start+27&&/[のをにがはとでへやも]/.test(chars[end-1]))end--;}
+    while(start<chars.length){
+      let end=start,weight=0,complete=false;
+      while(end<chars.length&&weight<UTTERANCE_CHUNK_CHARS){
+        const c=chars[end++];weight+=charWeight(c);
+        if(/[。！？!?]/.test(c)||c==='.'&&(!chars[end]||/\s/.test(chars[end]))){
+          while(end<chars.length&&weight<UTTERANCE_CHUNK_CHARS+4&&/[」』）”’]/.test(chars[end])){weight+=charWeight(chars[end++]);}
+          complete=true;break;
+        }
+      }
+      if(!complete&&end<chars.length){
+        const boundary=findNaturalBreak(chars,start,end,16);
+        if(boundary>start)end=boundary;
+        else end=trimIncompleteTail(chars,start,end,24);
         complete=true;
       }
       chunks.push({text:chars.slice(start,end).join('').trim(),complete,end});start=end;
@@ -76,7 +122,19 @@ export class Utterances {
     for(const c of this.chunks(chars.slice(offset).join(''))){
       // Late punctuation belongs to the old prefix, not a fresh model request.
       if(!hasWords(c.text)){start=offset+c.end;if(last&&item.emitted.at(-1)===last)last.end=start;continue;}
-      if(!item.final&&!c.complete&&(Array.from(c.text).length<UTTERANCE_TAIL_CHARS||now-item.lastAt<UTTERANCE_TAIL_HOLD_MS))break;
+      if(!item.final&&!c.complete){
+        const cChars=Array.from(c.text);
+        if(weightedLength(cChars)<UTTERANCE_TAIL_CHARS||now-item.lastAt<UTTERANCE_TAIL_HOLD_MS)break;
+        // Prefer cutting at a natural clause/comma boundary and leave the unfinished stub for the next piece.
+        const rawEnd=offset+c.end;
+        const natural=findNaturalBreak(chars,start,rawEnd,10);
+        const cut=natural>start?natural:trimIncompleteTail(chars,start,rawEnd,10);
+        const pieceText=chars.slice(start,cut).join('').trim();
+        if(!hasWords(pieceText))break;
+        const i=item.emitted.length;emit(i,pieceText,start,false);
+        item.emitted.push({text:pieceText,end:cut,confirmed:false});start=cut;
+        break;
+      }
       const i=item.emitted.length;emit(i,c.text,start,item.final||c.complete);
       item.emitted.push({text:c.text,end:offset+c.end,confirmed:false});start=offset+c.end;
     }

@@ -117,7 +117,7 @@ try{
   });
   await step('A realtime timed prefix is translated once and the final cumulative snapshot sends only new words',async()=>{
     await activate();await rpc('speech:start');await until(async()=>(await rpc('speech:status')).completed>0);
-    const before=requests.length,prefix='検証の前半の紹介を始めます',suffix='検証の後半も説明します。';
+    const before=requests.length,prefix='検証の前半の紹介を詳しく始めます',suffix='検証の後半も説明します。';
     mock.emit({type:'conversation.item.input_audio_transcription.text',item_id:'timed-growth',text:prefix,stash:'まだ未確認'});
     await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+prefix);
     mock.emit({type:'conversation.item.input_audio_transcription.completed',item_id:'timed-growth',transcript:prefix+suffix});
@@ -253,7 +253,7 @@ try{
     mock.emitStreaming({sentence_id:2,begin_time:1900,end_time:4300,sentence_end:true,text:'検証の前半です。検証の後半です。'},{input_tokens:500,output_tokens:20});await until(async()=>(await rpc('speech:status')).lastTranslation==='译：検証の後半です。');assert.deepEqual(requests.slice(before).flatMap(b=>b.flatMap(x=>x.segments.map(s=>s.text))),['検証の前半です。','検証の後半です。']);await until(async()=>(await rpc('speech:status')).asrUsage.inputTokens===500);
   });
   await step('Streaming fixed tails, absent fixed markers and punctuation corrections cannot replay completed speech',async()=>{
-    const before=requests.length,prefix='検証の途中の言葉を紹介します',suffix='検証の新しい内容です。';
+    const before=requests.length,prefix='検証の途中の言葉を詳しく紹介します',suffix='検証の新しい内容です。';
     mock.emitStreaming({sentence_id:70,sentence_end:false,text:prefix,words:[{text:prefix,fixed:true}]});
     await until(async()=>(await rpc('speech:status')).lastTranslation==='译：'+prefix);
     mock.emitStreaming({sentence_id:70,sentence_end:false,text:prefix+suffix});
@@ -286,14 +286,23 @@ try{
     assert.ok((await captionTexts()).includes(translatedText('閲読一。')));assert.ok(!(await captionTexts()).includes(translatedText('閲読二。')));await captionClick('回到最新');await until(async()=>(await captionTexts()).includes(translatedText('閲読二。')));assert.ok((await captionTexts()).some(t=>t.startsWith('上一条：')));await captionClick('上一条译文');assert.ok((await captionTexts()).includes(translatedText('閲読一。')));await page.screenshot({path:'artifacts/live-reading-controls.png'});await captionClick('回到最新');
     const d=await rpc('speech:diagnostics');assert.ok(d.metrics.asrMs?.samples>0);assert.ok(d.metrics.displayWaitMs?.samples>0);assert.equal(await page.evaluate(()=>globalThis.pageClicks),0);
   });
-  await step('Balanced mode shows the next SSE before completion and follows the growing last page',async()=>{
+  await step('Balanced mode protects reading time while live mode follows the growing last page before SSE completes',async()=>{
     await rpc('caption:save',{patch:{readingMode:'balanced'}});await rpc('cache:clear');
     const done=(await rpc('speech:status')).completed;
     mock.emitStreaming({sentence_id:40,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'長文表示。'});
-    await until(async()=>(await captionTexts()).some(t=>t.endsWith('末页新字')));
-    assert.equal((await rpc('speech:status')).completed,done);assert.ok(!streamTimings.at(-1).doneAt);
+    // In balanced mode, the just-shown current sentence stays readable instead of being evicted within 200 ms.
+    await new Promise(r=>setTimeout(r,500));
+    assert.ok((await captionTexts()).includes(translatedText('閲読二。')));
+    await until(async()=>(await captionTexts()).some(t=>t.includes('正在生成的中文字幕')));
     assert.ok((await captionTexts()).some(t=>t.startsWith('上一条：')));
     await until(async()=>(await rpc('speech:status')).completed>done);
+    // Live mode exposes the growing streamed last page immediately before SSE completion.
+    await rpc('caption:save',{patch:{readingMode:'live'}});await rpc('cache:clear');
+    const liveDone=(await rpc('speech:status')).completed;
+    mock.emitStreaming({sentence_id:401,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'長文表示。'});
+    await until(async()=>(await captionTexts()).some(t=>t.endsWith('末页新字')));
+    assert.equal((await rpc('speech:status')).completed,liveDone);assert.ok(!streamTimings.at(-1).doneAt);
+    await until(async()=>(await rpc('speech:status')).completed>liveDone);
     // Restore the predecessor expected by the subsequent withdrawal test.
     mock.emitStreaming({sentence_id:41,begin_time:0,end_time:mock.stats.audioMs,sentence_end:true,text:'閲読二。'});
     await until(async()=>(await captionTexts()).includes(translatedText('閲読二。')));

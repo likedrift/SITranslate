@@ -1,30 +1,30 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
-import {Utterances,UTTERANCE_CHUNK_CHARS,type SpeechPiece} from '../src/core/utterances.ts';
+import {Utterances,UTTERANCE_CHUNK_CHARS,UTTERANCE_TAIL_HOLD_MS,type SpeechPiece} from '../src/core/utterances.ts';
 
 const texts=(pieces:SpeechPiece[])=>pieces.map(p=>p.text);
 const prefix='今日は新しいゲームについて紹介します';
 const suffix='続いて操作方法も説明します。';
 function translatedTail(){
-  const u=new Utterances();u.update('same',prefix,false,0);const first=u.flush(800);
+  const u=new Utterances();u.update('same',prefix,false,0);const first=u.flush(UTTERANCE_TAIL_HOLD_MS);
   assert.deepEqual(texts(first),[prefix]);u.confirm(first[0].id,first[0].text);return {u,first};
 }
 
 test('a timed tail already translated is not included in the later complete snapshot',()=>{
-  const {u,first}=translatedTail(),next=u.update('same',prefix+suffix,true,1600);
+  const {u,first}=translatedTail(),next=u.update('same',prefix+suffix,true,2600);
   assert.deepEqual(texts(next),[suffix]);assert.notEqual(next[0].id,first[0].id);assert.ok(next[0].order>first[0].order);assert.equal(next[0].context,prefix);
-  assert.deepEqual(u.update('same',prefix+suffix,true,1800),[]);
+  assert.deepEqual(u.update('same',prefix+suffix,true,2800),[]);
 });
 test('growing snapshots cannot enlarge an emitted tail even while its translation is pending',()=>{
-  const u=new Utterances();u.update('pending',prefix,false,0);const first=u.flush(800);
-  const next=u.update('pending',prefix+suffix,true,1000);assert.deepEqual(texts(next),[suffix]);assert.notEqual(next[0].id,first[0].id);
+  const u=new Utterances();u.update('pending',prefix,false,0);const first=u.flush(UTTERANCE_TAIL_HOLD_MS);
+  const next=u.update('pending',prefix+suffix,true,1800);assert.deepEqual(texts(next),[suffix]);assert.notEqual(next[0].id,first[0].id);
 });
 test('successive timed tails and later punctuation are emitted exactly once',()=>{
-  const u=new Utterances(),a='あいうえおかきくけこさし',b='すせそたちつてとなにぬね',c='のはひふへほまみむめもや';
-  u.update('same',a,false,0);const first=u.flush(800);u.confirm(first[0].id,first[0].text);
-  assert.deepEqual(u.update('same',a+b,false,900),[]);assert.equal(u.nextTailFlushAt(),1600);
-  const second=u.flush(1600);assert.deepEqual(texts(second),[b]);u.confirm(second[0].id,second[0].text);
-  const third=u.update('same',a+b+c+'。',true,2400);assert.deepEqual(texts(third),[c+'。']);
+  const u=new Utterances(),a='あいうえおかきくけこさしすせそた',b='ちつてとなにぬねのはひふへほまみ',c='むめもやゆよらりるれろわをんあい';
+  u.update('same',a,false,0);const first=u.flush(UTTERANCE_TAIL_HOLD_MS);u.confirm(first[0].id,first[0].text);
+  assert.deepEqual(u.update('same',a+b,false,UTTERANCE_TAIL_HOLD_MS+100),[]);assert.equal(u.nextTailFlushAt(),UTTERANCE_TAIL_HOLD_MS*2);
+  const second=u.flush(UTTERANCE_TAIL_HOLD_MS*2);assert.deepEqual(texts(second),[b]);u.confirm(second[0].id,second[0].text);
+  const third=u.update('same',a+b+c+'。',true,UTTERANCE_TAIL_HOLD_MS*3);assert.deepEqual(texts(third),[c+'。']);
   assert.equal([...first,...second,...third].map(p=>p.text).join(''),a+b+c+'。');
   assert.equal(u.nextTailFlushAt(),undefined);
 });
