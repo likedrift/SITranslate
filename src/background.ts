@@ -19,7 +19,22 @@ let settings:Settings=structuredClone(DEFAULT_SETTINGS);
 let jobHistory:Record<string,{state:string;time:number}>={};
 let cacheEpoch=0;
 let storageWrites=Promise.resolve();
+let cachePersistTimer:ReturnType<typeof setTimeout>|undefined;
+const videoTabs=new Set<number>();
 const write=(values:Record<string,unknown>)=> {storageWrites=storageWrites.catch(()=>{}).then(()=>chrome.storage.session.set(values));return storageWrites;};
+function persistCacheSoon(){
+  if(cachePersistTimer!==undefined)return;
+  cachePersistTimer=setTimeout(()=>{cachePersistTimer=undefined;void write({translationCache:cache.snapshot()});},600);
+}
+function flushCacheNow(){
+  if(cachePersistTimer===undefined)return Promise.resolve();
+  clearTimeout(cachePersistTimer);cachePersistTimer=undefined;
+  return write({translationCache:cache.snapshot()});
+}
+function flushCacheClear(){
+  if(cachePersistTimer!==undefined){clearTimeout(cachePersistTimer);cachePersistTimer=undefined;}
+  return write({translationCache:[]});
+}
 const initialized=(async()=>{
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
@@ -40,8 +55,8 @@ const initialized=(async()=>{
 const trusted=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && !!sender.url?.startsWith(chrome.runtime.getURL(''));
 let captionWrites=Promise.resolve<unknown>(undefined);
 async function captionLayout():Promise<CaptionLayout>{return normalizeCaption((await chrome.storage.local.get('captionLayout')).captionLayout);}
-function saveCaption(patch:Partial<CaptionLayout>,reset=false){const next=captionWrites.catch(()=>{}).then(async()=>{const s=reset?structuredClone(DEFAULT_CAPTION):{...await captionLayout(),...patch};validateCaption(s);await chrome.storage.local.set({captionLayout:s});const tabs=await chrome.tabs.query({});await Promise.all(tabs.filter(t=>t.id!==undefined&&/^https?:\/\//.test(t.url??'')).map(t=>chrome.tabs.sendMessage(t.id!,{type:'video:layout',layout:s},{frameId:0}).catch(()=>{})));return s;});captionWrites=next;return next;}
-const speech=createSpeechController({ready:initialized,config:safeConfig,translate:async(input,tabId,observer)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url},observer);},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
+function saveCaption(patch:Partial<CaptionLayout>,reset=false){const next=captionWrites.catch(()=>{}).then(async()=>{const s=reset?structuredClone(DEFAULT_CAPTION):{...await captionLayout(),...patch};validateCaption(s);await chrome.storage.local.set({captionLayout:s});const targets=videoTabs.size?[...videoTabs]:(await chrome.tabs.query({active:true})).filter(t=>t.id!==undefined&&/^https?:\/\//.test(t.url??'')).map(t=>t.id!);await Promise.all(targets.map(id=>chrome.tabs.sendMessage(id,{type:'video:layout',layout:s},{frameId:0}).catch(()=>{})));return s;});captionWrites=next;return next;}
+const speech=createSpeechController({ready:initialized,config:safeConfig,onTabAttach:id=>{videoTabs.add(id);},translate:async(input,tabId,observer)=>{const tab=await chrome.tabs.get(tabId);return translate(input,{id:chrome.runtime.id,tab,frameId:0,url:tab.url},observer);},cancel:taskId=>{for(const job of jobs.values())if(job.taskId===taskId)job.controller.abort();}});
 const pageSender=(sender:chrome.runtime.MessageSender)=> sender.id===chrome.runtime.id && sender.tab?.id!==undefined && /^https?:\/\//.test(sender.url??'');
 function errorText(error:unknown){return error instanceof Error?error.message:'操作失败，请重试。';}
 async function recordJob(key:string,state:string) {
@@ -53,7 +68,11 @@ async function recordJob(key:string,state:string) {
 async function permissionsForProfiles(s:Settings){
   for(const p of s.profiles){const permission=endpointFor(p.baseUrl).permission;if(!await chrome.permissions.contains({origins:[permission]}))throw new Error('请先授权 API 服务地址的访问权限。');}
 }
-async function safeConfig(){await initialized;return configFor(settings);}
+async function safeConfig(profileId?:string){
+  await initialized;
+  if(profileId&&settings.profiles.some(p=>p.id===profileId))return configFor({...settings,activeProfileId:profileId});
+  return configFor(settings);
+}
 async function activeTab(){const [tab]=await chrome.tabs.query({active:true,currentWindow:true});if(tab?.id===undefined||!/^https?:\/\//.test(tab.url??''))throw new Error('此页面无法翻译。请打开普通 HTTP 或 HTTPS 网页。');return tab;}
 async function pageStatus(tabId:number,live:unknown){if(isPageStatus(live))return live;const stored=await chrome.storage.session.get(`page:${tabId}`);return pageStatusOrIdle(undefined,stored[`page:${tabId}`]);}
 async function inject(tabId:number){await chrome.scripting.executeScript({target:{tabId},files:['content.js']});}
@@ -107,6 +126,13 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       networkSignal.addEventListener('abort',clearProgress,{once:true});
       const progress=(raw:string)=>{
         if(observer&&!networkSignal.aborted){if(!firstToken&&raw){firstToken=true;observer.token?.();}const source=networkInput.blocks[0]?.segments[0];if(networkInput.blocks.length===1&&networkInput.blocks[0].segments.length===1&&source){const hasLongContext=Array.from(networkInput.blocks[0].context.trim()).length>=LIVE_LEAK_CONTEXT_MIN_CHARS;const limit=isLiveSubtitle(input)&&hasLongContext?liveMaxTranslationChars(source.text,input.target):Math.max(500,source.text.length*12);const text=streamSegment(raw,source.id,limit);if(text&&text!==lastText){pendingText=text;const wait=80-(Date.now()-lastProgress);if(wait<=0)flushProgress();else if(!progressTimer)progressTimer=setTimeout(flushProgress,wait);}}return;}
+        // Single-segment non-live subtitle streaming (e.g., YouTube visible captions) previews text early.
+        if(input.kind==='subtitle'&&!isLiveSubtitle(input)&&profile.stream&&networkInput.blocks.length===1&&networkInput.blocks[0].segments.length===1&&Date.now()-lastProgress>=80){
+          const source=networkInput.blocks[0].segments[0];
+          const text=streamSegment(raw,source.id,Math.max(500,source.text.length*12));
+          if(text&&text!==lastText){lastProgress=Date.now();lastText=text;chrome.tabs.sendMessage(tabId,{type:'video:subtitle-progress',requestId:input.requestId,text},{frameId}).catch(()=>{});}
+          return;
+        }
         // A validated prefix is only for the one plain-text selection preview; final result is still fully validated.
         if(input.kind!=='selection'||!profile.stream||Date.now()-lastProgress<100)return;
         const match=raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);if(!match)return;
@@ -120,7 +146,7 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
       }}finally{clearProgress();networkSignal.removeEventListener('abort',clearProgress);}
       if(!result)throw new Error('翻译失败。');
       if(networkSignal.aborted)throw new DOMException('已取消','AbortError');
-      if(settings.cacheEnabled&&epoch===cacheEpoch&&lookup){cache.putBlocks(lookup.keys,input,result);await write({translationCache:cache.snapshot()});}
+      if(settings.cacheEnabled&&epoch===cacheEpoch&&lookup){cache.putBlocks(lookup.keys,input,result);persistCacheSoon();}
       // The scheduler serializes this short update separately from long network calls.
       await updateUsage(result.usage);
       return result;
@@ -184,6 +210,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
         const config=await safeConfig();if(!config.ready)throw new Error('请先在翻译设置中配置 API Key 和模型。');
         if(['active','connecting'].includes(current.state))await speech.controlTab(tabId,'stop');
         await chrome.scripting.executeScript({target:{tabId},files:['video.js']});
+        videoTabs.add(tabId);
         await chrome.tabs.sendMessage(tabId,{type:'video:start',config},{frameId:0});
       }else if(!['active','connecting'].includes(current.state))await chrome.tabs.sendMessage(tabId,{type:'video:stop'},{frameId:0}).catch(()=>{});
     }
@@ -196,6 +223,11 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     return saveCaption({[message.context]:message.position});
   }
   if(message.type==='caption:geometry'&&pageSender(sender))return saveCaption(captionGeometryPatch(String(message.context??''),message.position,message.size,message.fontSize));
+  if(message.type==='caption:quick'&&pageSender(sender)){
+    const patch:Partial<CaptionLayout>={};
+    for(const key of ['showOriginal','fontSize','locked'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];
+    return saveCaption(patch);
+  }
   if(message.type==='selection:state'&&(ui||pageSender(sender)))return selectionState(ui?String(message.url??''):sender.url!);
   if(message.type==='selection:settings'&&pageSender(sender))return chrome.runtime.openOptionsPage();
   if(message.type==='translate')return translate(message.input,sender);
@@ -203,6 +235,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   if(message.type==='page:status'&&pageSender(sender)){
     if(sender.frameId!==0)return;
     const s=message.status;if(!isPageStatus(s)||s.message.length>400)throw new Error('无效进度。');
+    if(['done','watching','stopped'].includes(s.state))await flushCacheNow();
     await write({[`page:${sender.tab!.id}`]:s});return;
   }
   if(message.type==='task:heartbeat'&&(pageSender(sender)||ui))return true;
@@ -213,12 +246,12 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
   }
   if(!ui)throw new Error('此操作仅允许在扩展界面中执行。');
   switch(message.type){
-    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal','readingMode'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];if('width' in patch){patch.normalSize=undefined;patch.fullscreenSize=undefined;}return saveCaption(patch);}
+    case 'caption:save':{const patch:Partial<CaptionLayout>={};for(const key of ['fontSize','width','opacity','mode','locked','showOriginal','readingMode','style'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];if('width' in patch){patch.normalSize=undefined;patch.fullscreenSize=undefined;}return saveCaption(patch);}
     case 'caption:reset':return saveCaption({},true);
     case 'settings:get':return settings;
     case 'settings:save':{
       validateSettings(message.settings);await permissionsForProfiles(message.settings);settings=structuredClone(message.settings);
-      await chrome.storage.local.set({settings});cacheEpoch++;cache.clear();await write({translationCache:[]});return true;
+      await chrome.storage.local.set({settings});cacheEpoch++;cache.clear();await flushCacheClear();return true;
     }
     case 'preferences:save':{
       const candidate={...settings,target:message.target,display:message.display,activeProfileId:message.profileId};validateSettings(candidate);settings=candidate;await chrome.storage.local.set({settings});return true;
@@ -228,7 +261,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
       if(!['start','stop','display','retry'].includes(message.action))throw new Error('不支持的视频操作。');
       if(message.action==='start'||message.action==='stop')await speech.route({type:'speech:stop'},sender);
       if(message.action==='display'||(message.action==='start'&&typeof message.bilingual==='boolean'))await saveCaption({showOriginal:message.bilingual!==false});
-      const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
+      const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});videoTabs.add(tab.id!);
       const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
       const replied=await chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
       if(isVideoStatus(replied))return replied;
@@ -243,7 +276,7 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
       await chrome.storage.local.set({selectionOrigins:[...new Set(message.origins)]});return registerSelection();
     }
     case 'usage:get':return {usage:(await chrome.storage.local.get('usage')).usage??{input:0,output:0,estimatedCost:0,requests:0},cache:cache.size()};
-    case 'cache:clear':cacheEpoch++;cache.clear();await write({translationCache:[]});return true;
+    case 'cache:clear':cacheEpoch++;cache.clear();await flushCacheClear();return true;
     case 'usage:clear':await usageWrites;await chrome.storage.local.remove('usage');return true;
     default:throw new Error('不支持的操作。');
   }
@@ -284,6 +317,7 @@ chrome.commands.onCommand.addListener((command,tab)=>{
   void run().catch(async(error)=>{const target=tab?.id===undefined?(await chrome.tabs.query({active:true,currentWindow:true}))[0]:tab;if(target?.id){await chrome.action.setBadgeText({tabId:target.id,text:'!'});await chrome.action.setTitle({tabId:target.id,title:errorText(error)});void chrome.tabs.sendMessage(target.id,{type:'player:refresh'},{frameId:0}).catch(()=>{});}});
 });
 chrome.tabs.onRemoved.addListener(tabId=>{
+  videoTabs.delete(tabId);
   for(const job of jobs.values())if(job.tabId===tabId)job.controller.abort();
   for(const key of taskBudget.keys())if(key.startsWith(`${tabId}:`))taskBudget.delete(key);
   initialized.then(()=>write({taskBudgets:Object.fromEntries(taskBudget)})).catch(()=>{});

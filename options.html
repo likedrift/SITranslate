@@ -34,6 +34,14 @@
     <form id="settings-form" novalidate>
       <section class="card" id="providers">
         <div class="section-heading"><h2>模型服务</h2></div>
+        <div class="preset-bar" aria-label="快捷服务商预设">
+          <span class="preset-label">快捷预设</span>
+          <button type="button" class="preset-chip" data-preset="deepseek">DeepSeek</button>
+          <button type="button" class="preset-chip" data-preset="dashscope">阿里云百炼</button>
+          <button type="button" class="preset-chip" data-preset="openai">OpenAI</button>
+          <button type="button" class="preset-chip" data-preset="openrouter">OpenRouter</button>
+          <button type="button" class="preset-chip" data-preset="ollama">本地 Ollama</button>
+        </div>
         <div class="provider-toolbar">
           <label class="grow">服务配置<select id="profile-list"></select></label>
           <button class="secondary" type="button" id="add-profile">添加</button>
@@ -76,20 +84,26 @@
           <label class="switch-row"><span class="switch-text">设为默认服务</span><span class="switch"><input id="is-active" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
           <label class="switch-row"><span class="switch-text">流式响应</span><span class="switch"><input id="stream" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
           <label class="switch-row" title="仅在服务商支持时开启"><span class="switch-text">JSON 模式</span><span class="switch"><input id="json-mode" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
-          <label class="switch-row" id="thinking-row"><span class="switch-text">关闭推理</span><span class="switch"><input id="disable-thinking" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
+          <label class="switch-row" id="thinking-row" title="DeepSeek / Qwen3 等推理模型开启后可显著降低实时字幕延迟"><span class="switch-text">关闭推理<small class="inline-note">（降低推理模型字幕延迟）</small></span><span class="switch"><input id="disable-thinking" type="checkbox" role="switch"><span class="switch-ui" aria-hidden="true"></span></span></label>
         </div>
       </section>
     </form>
 
     <section class="card" id="speech">
       <form id="speech-form" novalidate>
-        <div class="section-heading"><h2>实时语音</h2></div>
+        <div class="section-heading section-heading-row"><h2>实时语音</h2><span class="section-tag">独立保存</span></div>
         <div class="form-grid">
           <label class="wide">百炼语音 API Key
             <span class="input-action">
               <input id="speech-key" type="password" autocomplete="off" maxlength="512" placeholder="与文字翻译 Key 分开保存">
               <button class="text-button" type="button" id="toggle-speech-key" aria-label="显示语音 API Key">显示</button>
             </span>
+          </label>
+          <label class="wide">语音专用翻译模型
+            <select id="speech-profile">
+              <option value="">跟随当前默认模型</option>
+            </select>
+            <small>可单独指定低延迟 Flash 模型用于实时字幕，不影响整页翻译所选模型。</small>
           </label>
           <label>识别模型
             <input id="speech-model" list="speech-models" maxlength="100" value="qwen3-asr-flash-realtime">

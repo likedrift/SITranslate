@@ -1,4 +1,4 @@
-import {EMPTY_STATUS, type PublicConfig, type PageStatus, type TextBlock, type TranslationResult, type DisplayMode} from './core/types';
+import {EMPTY_STATUS, LANGUAGES, type PublicConfig, type PageStatus, type TextBlock, type TranslationResult, type DisplayMode} from './core/types';
 import {estimateOutputTokens} from './core/text';
 
 // Isolated-world singleton: repeated injection must not add listeners or lose restore records.
@@ -20,7 +20,7 @@ function boot(){
   let panelHost:HTMLElement|undefined,panelRoot:ShadowRoot|undefined,selectionText='',selectionContext='',selectionTask='',selectionRequest='',selectionAnchor:DOMRect|undefined;
   let selectionRange:Range|undefined,selectionRoots:ShadowRoot[]=[],selectionPoint:{x:number;y:number}|undefined,selectionBackward=false;
   let selectionTimer:ReturnType<typeof setTimeout>|undefined,selectionPhase:'button'|'loading'|'result'='button';
-  let selectionEnabled=false,panelDragged=false,copyResetTimer:ReturnType<typeof setTimeout>|undefined;
+  let selectionEnabled=false,panelDragged=false,panelPinned=false,selectionTarget='',copyResetTimer:ReturnType<typeof setTimeout>|undefined;
   async function refreshSelection(){try{const state=await message<{enabled:boolean}>({type:'selection:state'});selectionEnabled=state.enabled;if(!selectionEnabled)closePanel();}catch{selectionEnabled=false;}}
 
   async function message<T=unknown>(value:unknown):Promise<T>{
@@ -41,6 +41,18 @@ function boot(){
     const sourceParts=split(record.source);
     return record.ids.map((id,i)=>(sourceParts[i].match(/^\s*/)?.[0]??'')+(record.texts.get(id)??'').trim()+(sourceParts[i].match(/\s*$/)?.[0]??'')).join('');
   }
+  const bilingualBlockTags=new Set(['P','H1','H2','H3','H4','H5','H6','LI','BLOCKQUOTE','FIGCAPTION','DT','DD','TD','TH']);
+  function isStandaloneBlockText(node:Text){
+    const parent=node.parentElement;
+    if(!parent||!bilingualBlockTags.has(parent.tagName))return false;
+    for(const sibling of parent.childNodes){
+      if(sibling===node)continue;
+      if(sibling instanceof Element&&sibling.hasAttribute('data-si-owned'))continue;
+      if(sibling.nodeType===Node.TEXT_NODE&&!sibling.textContent?.trim())continue;
+      return false;
+    }
+    return true;
+  }
   function renderRecord(record:Record,display:DisplayMode){
     if(!same(record,record.version)||record.texts.size!==record.ids.length)return;
     const translation=translatedValue(record);
@@ -49,8 +61,16 @@ function boot(){
       if(display==='replace'){record.node.data=translation;record.applied=translation;}
       else {
         record.node.data=record.source;record.applied=record.source;
+        const clean=translation.trim();
+        const block=isStandaloneBlockText(record.node);
         const span=document.createElement('span');span.dataset.siOwned='translation';span.lang=config?.target??'zh-Hans';
-        span.textContent=`［${translation.trim()}］`;span.style.cssText='color:inherit;opacity:.78;margin-inline-start:.35em;font-size:.94em;overflow-wrap:anywhere;';
+        if(block){
+          span.textContent=clean;
+          span.style.cssText='display:block;margin-top:.32em;padding:.1em 0 .1em .65em;border-inline-start:2px solid color-mix(in srgb,currentColor 26%,transparent);color:inherit;opacity:.82;font-size:.93em;line-height:1.55;font-weight:400;overflow-wrap:anywhere;';
+        }else{
+          span.textContent=` ${clean}`;
+          span.style.cssText='color:inherit;opacity:.78;margin-inline-start:.3em;font-size:.93em;overflow-wrap:anywhere;';
+        }
         record.node.after(span);record.annotation=span;
       }
     });record.state='translated';
@@ -219,9 +239,16 @@ function boot(){
     .trigger svg{display:block;pointer-events:none}
     .card{width:min(368px,calc(100vw - 24px));background:rgba(255,255,255,.97);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid #e2e8f0;box-shadow:0 14px 36px -8px rgba(15,23,42,.16),0 3px 10px -2px rgba(15,23,42,.07);border-radius:14px;padding:13px 15px}
     .card.enter{animation:si-pop .14s ease-out}
-    header{display:flex;align-items:center;justify-content:space-between;gap:8px;margin:-4px -4px 10px;padding:4px;border-radius:8px;font-size:12px;font-weight:600;color:#475569;cursor:grab;user-select:none;touch-action:none}
+    header{display:flex;align-items:center;justify-content:space-between;gap:6px;margin:-4px -4px 10px;padding:4px;border-radius:8px;font-size:12px;font-weight:600;color:#475569;cursor:grab;user-select:none;touch-action:none}
     header.dragging{cursor:grabbing}
     .title-wrap{display:flex;align-items:center;gap:7px;min-width:0}
+    .head-tools{display:flex;align-items:center;gap:4px;flex-shrink:0}
+    .lang-select{font:inherit;font-size:11.5px;font-weight:500;color:#334155;background:#f1f5f9;border:1px solid #e2e8f0;border-radius:6px;padding:2px 6px;height:24px;max-width:92px;cursor:pointer}
+    .lang-select:hover{border-color:#cbd5e1;color:#0f172a}
+    .lang-select:focus-visible{outline:2px solid #1d4ed8;outline-offset:1px}
+    .pin{padding:0;width:24px;height:24px;border:0;background:transparent;border-radius:6px;color:#64748b;display:grid;place-items:center;flex-shrink:0}
+    .pin:hover{background:#f1f5f9;color:#0f172a}
+    .pin[aria-pressed=true]{background:#dbeafe;color:#1d4ed8}
     .mini-mark{display:grid;place-items:center;width:18px;height:18px;border-radius:5px;background:#1d4ed8;color:#fff;flex-shrink:0}
     .mini-mark svg{display:block}
     .loading-dots{display:inline-flex;align-items:center;gap:3px;margin-left:2px}
@@ -255,6 +282,11 @@ function boot(){
       button:hover{background:#262b36;border-color:#3b4252;color:#fff}
       .close{border:0;background:transparent;color:#94a3b8}
       .close:hover{background:#262b36;color:#f1f5f9}
+      .lang-select{background:#1e222b;border-color:#2a303c;color:#cbd5e1}
+      .lang-select:hover{border-color:#3b4252;color:#f8fafc}
+      .pin{border:0;background:transparent;color:#94a3b8}
+      .pin:hover{background:#262b36;color:#f1f5f9}
+      .pin[aria-pressed=true]{background:rgba(59,130,246,.22);color:#93c5fd}
       .hint{color:#94a3b8}
       .error{color:#f87171}
     }`;
@@ -291,10 +323,10 @@ function boot(){
   function closePanel(){
     if(copyResetTimer){clearTimeout(copyResetTimer);copyResetTimer=undefined;}
     if(selectionTask)message({type:'task:cancel',taskId:selectionTask}).catch(()=>{});
-    selectionTask='';selectionRequest='';selectionPhase='button';panelDragged=false;panelHost?.remove();panelHost=undefined;panelRoot=undefined;
+    selectionTask='';selectionRequest='';selectionPhase='button';panelDragged=false;panelPinned=false;selectionTarget='';panelHost?.remove();panelHost=undefined;panelRoot=undefined;
   }
   function createPanel(){
-    panelHost?.remove();panelDragged=false;panelHost=document.createElement('div');panelHost.dataset.siOwned='panel';
+    panelHost?.remove();panelDragged=false;panelPinned=false;panelHost=document.createElement('div');panelHost.dataset.siOwned='panel';
     panelRoot=panelHost.attachShadow({mode:'closed'});const style=document.createElement('style');style.textContent=panelCss;panelRoot.append(style);
     document.documentElement.append(panelHost);
     panelHost.addEventListener('pointerdown',event=>event.stopPropagation());
@@ -303,7 +335,7 @@ function boot(){
   function bindCardDrag(header:HTMLElement){
     let dragging:{pointerId:number;startX:number;startY:number;left:number;top:number}|undefined;
     header.addEventListener('pointerdown',event=>{
-      if(event.button!==0||!panelHost||(event.target instanceof Element&&event.target.closest('button')))return;
+      if(event.button!==0||!panelHost||(event.target instanceof Element&&event.target.closest('button,select')))return;
       event.preventDefault();
       const rect=panelHost.getBoundingClientRect();
       dragging={pointerId:event.pointerId,startX:event.clientX,startY:event.clientY,left:rect.left,top:rect.top};
@@ -349,7 +381,15 @@ function boot(){
     const label=document.createElement('span');label.className='title-text';label.textContent=loading?'思译 · 正在翻译':'思译 · 选中文字';titleWrap.append(label);
     if(loading){const dots=document.createElement('span');dots.className='loading-dots';dots.setAttribute('aria-hidden','true');dots.innerHTML='<i></i><i></i><i></i>';titleWrap.append(dots);}
     const closeBtn=button('×',closePanel,'close');closeBtn.setAttribute('aria-label','关闭翻译');
-    header.append(titleWrap,closeBtn);bindCardDrag(header);
+    const pinBtn=document.createElement('button');pinBtn.type='button';pinBtn.className='pin';pinBtn.title=panelPinned?'取消钉住':'钉住窗口';pinBtn.setAttribute('aria-label',panelPinned?'取消钉住':'钉住窗口');pinBtn.setAttribute('aria-pressed',String(panelPinned));
+    pinBtn.innerHTML=`<svg width="13" height="13" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 17v5"/><path d="M9 10.76a2 2 0 0 1-1.11 1.79l-1.78.9A2 2 0 0 0 5 15.24V16a1 1 0 0 0 1 1h12a1 1 0 0 0 1-1v-.76a2 2 0 0 0-1.11-1.79l-1.78-.9A2 2 0 0 1 15 10.76V7a1 1 0 0 1 1-1 2 2 0 0 0 0-4H8a2 2 0 0 0 0 4 1 1 0 0 1 1 1z"/></svg>`;
+    pinBtn.addEventListener('click',()=>{panelPinned=!panelPinned;pinBtn.setAttribute('aria-pressed',String(panelPinned));pinBtn.title=panelPinned?'取消钉住':'钉住窗口';pinBtn.setAttribute('aria-label',pinBtn.title);});
+    const langSelect=document.createElement('select');langSelect.className='lang-select';langSelect.setAttribute('aria-label','临时切换目标语言');
+    for(const [id,name] of LANGUAGES){const opt=document.createElement('option');opt.value=id;opt.textContent=name;langSelect.append(opt);}
+    langSelect.value=selectionTarget||config?.target||'zh-Hans';
+    langSelect.addEventListener('change',()=>{selectionTarget=langSelect.value;void translateSelection();});
+    const tools=document.createElement('div');tools.className='head-tools';tools.append(langSelect,pinBtn,closeBtn);
+    header.append(titleWrap,tools);bindCardDrag(header);
     const result=document.createElement('div');result.className=`result${error?' error':''}`;result.textContent=text;result.setAttribute('aria-live','polite');
     card.append(header,result);
     if(!loading){const actions=document.createElement('div');actions.className='actions';
@@ -381,8 +421,10 @@ function boot(){
       if(selectionTask!==localTask)return;
       if(!c.ready)throw new Error('请先打开扩展设置，填写 API Key 和模型。');
       if(selectionText.length>5000)throw new Error('选中文字超过 5,000 字符，请缩小选区，或使用整页翻译。');
+      const target=selectionTarget||c.target;selectionTarget=target;
+      const select=panelRoot?.querySelector<HTMLSelectElement>('.lang-select');if(select)select.value=target;
       heartbeat=setInterval(()=>message({type:'task:heartbeat'}).catch(()=>{}),15000);
-      const response=await message<TranslationResult>({type:'translate',input:{kind:'selection',taskId:localTask,requestId,profileId:c.profileId,target:c.target,
+      const response=await message<TranslationResult>({type:'translate',input:{kind:'selection',taskId:localTask,requestId,profileId:c.profileId,target,
         blocks:[{id:'selection',context:c.includeContext?selectionContext.slice(0,2500):'',segments:[{id:'selection-text',text:selectionText}]}]}});
       if(selectionTask!==localTask)return;selectionPhase='result';showResult(response.segments[0].text);
     }catch(error){if(selectionTask===localTask){selectionPhase='result';showResult(error instanceof Error?error.message:'翻译失败，请重试。',true);}}
@@ -439,7 +481,7 @@ function boot(){
   // No text leaves the page in these selection listeners; only an explicit click invokes translation.
   document.addEventListener('pointerup',event=>{if(panelHost&&event.composedPath().includes(panelHost))return;rememberSelection(event);if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,90);},{passive:true});
   document.addEventListener('keyup',event=>{if(event.key==='Escape'){if(selectionTimer)clearTimeout(selectionTimer);closePanel();return;}if(event.shiftKey||['ArrowLeft','ArrowRight','ArrowUp','ArrowDown'].includes(event.key)){if(panelHost&&event.composedPath().includes(panelHost))return;rememberSelection(event);if(selectionTimer)clearTimeout(selectionTimer);selectionTimer=setTimeout(detectSelection,100);}});
-  document.addEventListener('pointerdown',event=>{if(panelHost&&!event.composedPath().includes(panelHost)&&selectionPhase!=='button')closePanel();},{passive:true});
+  document.addEventListener('pointerdown',event=>{if(panelHost&&!panelPinned&&!event.composedPath().includes(panelHost)&&selectionPhase!=='button')closePanel();},{passive:true});
   document.addEventListener('scroll',()=>{if(selectionPhase==='button')closePanel();},{passive:true,capture:true});
   window.addEventListener('resize',positionPanel,{passive:true});
   window.addEventListener('pagehide',()=>{stop();closePanel();});

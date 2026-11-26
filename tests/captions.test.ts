@@ -18,8 +18,9 @@ test('Caption original display migrates once onto showOriginal',()=>{
   assert.doesNotMatch(NO_VIDEO_CAPTION_MESSAGE,/后续版本/);
 });
 test('Caption settings validate ranges and independent fullscreen positions',()=>{
-  validateCaption({...DEFAULT_CAPTION,normal:{x:0,y:1},fullscreen:{x:1,y:0}});
-  for(const patch of [{fontSize:NaN},{width:100},{opacity:0},{normal:{x:-1,y:0}},{fullscreen:null}])assert.throws(()=>validateCaption({...DEFAULT_CAPTION,...patch} as any));
+  validateCaption({...DEFAULT_CAPTION,style:'minimal',normal:{x:0,y:1},fullscreen:{x:1,y:0}});
+  validateCaption({...DEFAULT_CAPTION,style:'solid'});
+  for(const patch of [{fontSize:NaN},{width:100},{opacity:0},{style:'neon'},{normal:{x:-1,y:0}},{fullscreen:null}])assert.throws(()=>validateCaption({...DEFAULT_CAPTION,...patch} as any));
 });
 test('Caption positions remain within anchor and scale with fullscreen and viewport resize',()=>{
   const rect={left:36,top:80,right:756,bottom:485,width:720,height:405},s={...DEFAULT_CAPTION,normal:{x:0,y:1},fullscreen:{x:1,y:0}};

@@ -10,7 +10,7 @@ const SKIP_AFTER_MS=12000,EXPIRE_AFTER_MS=15000,TRANSLATION_TIMEOUT_MS=12000;
 const LATEST_LIMIT=128,SOURCE_META_LIMIT=32,FINAL_ITEM_LIMIT=64;
 /** Health, finals and paint share one full snapshot. Lifecycle and failures flush immediately. */
 export const SPEECH_PERSIST_INTERVAL_MS=15_000;
-export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number,observer?:TranslationObserver)=>Promise<TranslationResult>;cancel:(taskId:string)=>void}){
+export function createSpeechController(deps:{ready:Promise<unknown>;config:(profileId?:string)=>Promise<PublicConfig>;translate:(input:TranslationInput,tabId:number,observer?:TranslationObserver)=>Promise<TranslationResult>;cancel:(taskId:string)=>void;onTabAttach?:(tabId:number)=>void}){
   let state:SpeechStatus={...IDLE_SPEECH},config:PublicConfig,queue:SpeechPiece[]=[],busy=false,epoch=0,context='',shownOrder=-1;
   const utterances=new Utterances(),latest=new Map<string,string>(),translatedPieces=new Map<string,string>(),finalItems=new Set<string>();
   const diagnostics=new SpeechDiagnostics(),sourceMeta=new Map<string,{firstAt:number;receivedAt:number;sourceEndAt?:number}>();
@@ -33,6 +33,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   async function refreshGlossary(){const saved=await chrome.storage.local.get('speechSettings');speechGlossary=liveGlossary((saved.speechSettings as {context?:unknown}|undefined)?.context);}
   const wait=(ms:number)=>new Promise<void>(resolve=>{setTimeout(resolve,ms);});
   const loaded=deps.ready.then(async()=>{const data=await chrome.storage.session.get(['speechState','speechConfig','speechDiagnostics']);if(isSpeechStatus(data.speechState))state=data.speechState;if(data.speechConfig)config=data.speechConfig;if(data.speechDiagnostics){diagnostics.load(data.speechDiagnostics.rows);counters={...counters,...data.speechDiagnostics.counters};}
+    await refreshGlossary();
     const contexts=await chrome.runtime.getContexts({contextTypes:[chrome.runtime.ContextType.OFFSCREEN_DOCUMENT]});
     if(!contexts.length&&['active','connecting'].includes(state.state)){state={...state,state:'stopped',message:'上次音频会话已中断，请重新开启。'};await chrome.declarativeNetRequest.updateSessionRules({removeRuleIds:[891]});}
     if(contexts.length&&['active','connecting'].includes(state.state)){for(const row of diagnostics.rows)if(!row.outcome)row.outcome='cancelled';await caption({resetProvisional:true});}
@@ -67,6 +68,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   }
   async function attachCaption(){
     await chrome.scripting.executeScript({target:{tabId:state.tabId},files:['video.js']});
+    deps.onTabAttach?.(state.tabId);
     const attached=await chrome.tabs.sendMessage(state.tabId,{type:'video:live-start',sessionId:state.sessionId,recognitionId:state.recognitionId},{frameId:0});
     if(attached===false)throw new Error('字幕恢复失败。');
   }
@@ -134,8 +136,9 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
   }
   async function start(test=false,targetTabId?:number){
     await stop();const saved=await chrome.storage.local.get('speechSettings');const settings=normalizeSpeech(saved.speechSettings??DEFAULT_SPEECH);
+    speechGlossary=liveGlossary(settings.context);
     if(!settings.apiKey.trim())throw new Error('请先在设置的「实时语音」中填写百炼 API Key。');
-    config=await deps.config();if(!test&&!config.ready)throw new Error('请先配置文字翻译模型。');
+    config=await deps.config(settings.profileId);if(!test&&!config.ready)throw new Error('请先配置文字翻译模型。');
     const tab=targetTabId===undefined?(await chrome.tabs.query({active:true,currentWindow:true}))[0]:await chrome.tabs.get(targetTabId);if(!test&&(tab?.id===undefined||!/^https?:\/\//.test(tab.url??'')))throw new Error('请在要翻译的视频网页中开始。');
     testing=test;state={...IDLE_SPEECH,state:'connecting',sessionId:crypto.randomUUID(),recognitionId:crypto.randomUUID(),pageUrl:test?undefined:tab.url,tabId:test?-1:tab.id!,message:test?'正在测试语音连接…':'正在连接语音服务…'};context='';shownOrder=-1;await persist(true);
     try{
@@ -168,7 +171,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(m.type==='speech:failed')return serial(()=>m.sessionId===state.sessionId&&m.recognitionId===state.recognitionId?stop(String(m.message??'音频连接失败。').slice(0,300),true):Promise.resolve(state));
       if(m.type==='speech:ready'){if(testing)return serial(()=>m.sessionId===state.sessionId?stop('语音连接成功，可以开始直播翻译。'):Promise.resolve(state));state.state='active';state.message='已连接，等待标签页声音。';await caption({resumed:true});await persist(true);return;}
       if(m.type==='speech:warning'){if(m.reconnecting){if(inflight){for(const id of inflight.traceIds)diagnostics.update(id,{outcome:'cancelled'});void caption({failed:true,pieceId:inflight.id,version:inflight.version});}for(const p of queue)for(const id of pieceTraceIds(p))diagnostics.update(id,{outcome:'cancelled'});inflight=undefined;epoch++;clearTailTimer();busy=false;deps.cancel(`subtitle-live-${state.sessionId}`);state.state='connecting';utterances.reset();sourceMeta.clear();latest.clear();translatedPieces.clear();finalItems.clear();queue=[];shownOrder=-1;}state.message=String(m.message).slice(0,300);await persist(true);return;}
-      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(m.asrUsage&&['inputTokens','outputTokens','totalTokens'].every(k=>Number.isSafeInteger(m.asrUsage[k])&&m.asrUsage[k]>=0&&m.asrUsage[k]<=2e12))state.asrUsage={inputTokens:m.asrUsage.inputTokens,outputTokens:m.asrUsage.outputTokens,totalTokens:m.asrUsage.totalTokens};if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';await refreshGlossary();if(m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;enqueue(utterances.flush());scheduleTailFlush();await persist();return;}
+      if(m.type==='speech:health'){state.seconds=Math.max(0,Number(m.seconds)||0);state.sentBytes=Math.max(0,Number(m.sentBytes)||0);state.hasAudio=!!m.hasAudio;if(m.asrUsage&&['inputTokens','outputTokens','totalTokens'].every(k=>Number.isSafeInteger(m.asrUsage[k])&&m.asrUsage[k]>=0&&m.asrUsage[k]<=2e12))state.asrUsage={inputTokens:m.asrUsage.inputTokens,outputTokens:m.asrUsage.outputTokens,totalTokens:m.asrUsage.totalTokens};const silentSeconds=Math.max(0,Number(m.silentSeconds)||0);if(!state.hasAudio&&silentSeconds>=20&&state.completed>0)state.message='持续静音中（暂停或静音仍在计费，不用时请停止）。';else if(!state.hasAudio&&state.seconds>8)state.message='未检测到声音，请播放直播并检查播放器是否静音。';if(m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;enqueue(utterances.flush());scheduleTailFlush();await persist();return;}
       if(state.resumePending)return;
       const text=typeof m.text==='string'?m.text.trim().slice(-1500):'',preview=typeof m.preview==='string'?m.preview.slice(0,500):'';
       const transcriptEpoch=epoch;state.lastSource=(text+preview).slice(0,2000);await caption({source:state.lastSource,preview:true});
@@ -176,7 +179,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
       if(Number.isSafeInteger(m.beginMs)&&m.beginMs>=0)state.sourceTime={beginMs:m.beginMs,...(Number.isSafeInteger(m.endMs)&&m.endMs>=m.beginMs?{endMs:m.endMs}:{})};
       const itemId=String(m.itemId??'unknown').slice(0,100),receivedAt=Number.isFinite(m.receivedAt)&&Math.abs(Date.now()-m.receivedAt)<10000?m.receivedAt:Date.now(),previous=sourceMeta.get(itemId);counters.asrEvents++;if(!m.final){counters.asrIntermediate++;if(text)counters.asrStableIntermediate++;}
       const incomingEnd=Number.isFinite(m.sourceEndAt)&&m.sourceEndAt<=receivedAt&&m.sourceEndAt>receivedAt-60000?m.sourceEndAt:undefined,carriedEnd=previous?.sourceEndAt!==undefined&&previous.sourceEndAt<=receivedAt&&previous.sourceEndAt>receivedAt-60000?previous.sourceEndAt:undefined,sourceEndAt=incomingEnd??carriedEnd;
-      sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(sourceEndAt!==undefined?{sourceEndAt}:{})});while(sourceMeta.size>SOURCE_META_LIMIT)sourceMeta.delete(sourceMeta.keys().next().value!);await refreshGlossary();if(transcriptEpoch!==epoch||m.sessionId!==state.sessionId||!['connecting','active'].includes(state.state))return;enqueue(utterances.update(itemId,text,!!m.final));
+      sourceMeta.set(itemId,{firstAt:previous?.firstAt??receivedAt,receivedAt,...(sourceEndAt!==undefined?{sourceEndAt}:{})});while(sourceMeta.size>SOURCE_META_LIMIT)sourceMeta.delete(sourceMeta.keys().next().value!);enqueue(utterances.update(itemId,text,!!m.final));
       if(m.final&&!finalItems.has(itemId)){finalItems.add(itemId);if(finalItems.size>FINAL_ITEM_LIMIT)finalItems.delete(finalItems.values().next().value!);context=liveContext(context,text);}
       scheduleTailFlush();
       if(m.final)await persist();return;
@@ -190,7 +193,7 @@ export function createSpeechController(deps:{ready:Promise<unknown>;config:()=>P
     if(m.type==='speech:diagnostics'){const local=await chrome.storage.local.get(['speechSettings','settings','captionLayout']);const speech=local.speechSettings??DEFAULT_SPEECH,profile=(local.settings?.profiles??[]).find((item:{id?:string;model?:unknown;stream?:unknown})=>item?.id===local.settings?.activeProfileId),target=(typeof config==='undefined'?undefined:config?.target)??local.settings?.target;return {extensionVersion:chrome.runtime.getManifest().version,...diagnostics.report(),counters:{...counters},settings:diagnosticSettings({asrModel:speech.model,language:speech.language,textModel:profile?.model,textStream:profile?.stream,readingMode:local.captionLayout?.readingMode??'balanced',target,terms:liveGlossary((speech as {context?:unknown}).context).length>0}),policy:{maxQueue:LIVE_QUEUE_LIMIT,skipAfterMs:SKIP_AFTER_MS,expireAfterMs:EXPIRE_AFTER_MS,translationTimeoutMs:TRANSLATION_TIMEOUT_MS,silenceDurationMs:vadSilenceMs((speech as {silenceDurationMs?:unknown}).silenceDurationMs)}};}
     if(m.type==='speech:diagnostics-clear'){diagnostics.clear();counters={asrEvents:0,asrIntermediate:0,asrStableIntermediate:0};await persist(true);return true;}
     if(m.type==='speech:settings-get')return (await chrome.storage.local.get('speechSettings')).speechSettings??DEFAULT_SPEECH;
-    if(m.type==='speech:settings-save'){const next=normalizeSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:next});return true;}
+    if(m.type==='speech:settings-save'){const next=normalizeSpeech(m.settings);if(['active','connecting'].includes(state.state))await serial(()=>stop('语音配置已修改，请重新开始。'));await chrome.storage.local.set({speechSettings:next});speechGlossary=liveGlossary(next.context);return true;}
     if(m.type==='speech:status')return speechStatusOrIdle(state);
     if(m.type==='speech:start')return serial(()=>start());
     if(m.type==='speech:test')return serial(()=>start(true));

@@ -43,7 +43,7 @@
     </section>
     <div class="row actions">
       <button class="secondary" id="stop" type="button" disabled>停止</button>
-      <button class="secondary" id="restore" type="button">恢复原文</button>
+      <button class="secondary" id="restore" type="button" disabled>恢复原文</button>
       <button class="text-button" id="retry" type="button" hidden>重试失败部分</button>
     </div>
     <p class="notice" id="error" role="alert" hidden></p>
@@ -52,7 +52,7 @@
 
   <section class="accordion-group">
     <details class="fold feature" id="speech-fold">
-      <summary><span>实时语音</span><button class="text-button compact" id="speech-settings" type="button">语音设置</button></summary>
+      <summary><span>实时语音</span><span class="fold-badge" id="speech-badge" hidden></span><button class="text-button compact" id="speech-settings" type="button">语音设置</button></summary>
       <div class="fold-body">
         <p id="speech-state" class="status" aria-live="polite" hidden>未开始</p>
         <p id="speech-timing" class="status" hidden></p>
@@ -66,7 +66,7 @@
     </details>
 
     <details class="fold feature" id="video-fold">
-      <summary>视频字幕</summary>
+      <summary><span>视频字幕</span><span class="fold-badge" id="video-badge" hidden></span></summary>
       <div class="fold-body">
         <p id="video-state" class="status" aria-live="polite" hidden>正在读取字幕状态…</p>
         <div class="row">
@@ -87,7 +87,14 @@
     <details class="fold">
       <summary>字幕位置与显示</summary>
       <div class="fold-body">
-        <p class="status">拖动字幕条移动，四角缩放并调整字号。翻页和实时操作在字幕右上方的「⋯」里。宽度会清除手动尺寸。</p>
+        <p class="status">拖动字幕条移动，四角缩放并调整字号。翻页和快捷操作在字幕右上方的「⋯」里，移开鼠标后自动收起。</p>
+        <label>字幕风格
+          <select id="caption-style">
+            <option value="glass">轻磨砂玻璃</option>
+            <option value="minimal">极简无框描边</option>
+            <option value="solid">高对比深底</option>
+          </select>
+        </label>
         <label>实时字幕节奏
           <select id="caption-reading">
             <option value="balanced">阅读优先</option>
@@ -130,7 +137,7 @@
     </details>
 
     <details class="fold">
-      <summary>划词</summary>
+      <summary><span>划词</span><span class="fold-badge" id="selection-badge" hidden></span></summary>
       <div class="fold-body">
         <p class="status">选中文字后，再点击浮出的翻译图标。</p>
         <button class="text-button" id="grant-site" type="button" disabled>正在读取划词状态…</button>
@@ -138,7 +145,7 @@
     </details>
   </section>
 
-  <footer><span>点击后才发送文字</span><kbd id="shortcut-key">Alt+Shift+T</kbd></footer>
+  <footer><span>点击后才发送文字</span><button class="kbd-button" id="shortcut-key" type="button" title="点击修改扩展快捷键">Alt+Shift+T</button></footer>
 </main>
 <script type="module" src="/src/ui/popup.ts"></script>
 </body>

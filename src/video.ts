@@ -22,8 +22,10 @@ function boot(){
   const reader=new LiveReader();let livePreview='',previousLine:HTMLDivElement|undefined,liveTools:HTMLDivElement|undefined,holdButton:HTMLButtonElement|undefined,liveHint:HTMLSpanElement|undefined;
   const painted=new Set<string>();let paintScheduled=false;
   let layout:CaptionLayout=structuredClone(DEFAULT_CAPTION),layoutEpoch=0,card:HTMLDivElement|undefined,pager:HTMLDivElement|undefined;
-  let menu:HTMLDivElement|undefined,menuToggle:HTMLButtonElement|undefined,menuOpen=false;
+  let menu:HTMLDivElement|undefined,menuToggle:HTMLButtonElement|undefined,menuOpen=false,menuHideTimer:ReturnType<typeof setTimeout>|undefined,hoveringOverlay=false;
+  let quickOriginalBtn:HTMLButtonElement|undefined,quickLockBtn:HTMLButtonElement|undefined;
   let content:HTMLDivElement|undefined,pendingLayout:CaptionLayout|undefined;
+  let ytStreamRequestId='',ytStreamText='';
   let pageIndex=0,pageKey='',pageAt=0,pageCount=1;
   let drag:{x:number;y:number;pointerId:number;box:CaptionBox;area:CaptionBox;before:CaptionLayout;full:boolean;corner?:CaptionCorner;minHeight:number;moved:boolean}|undefined;
   const disposers:(()=>void)[]=[];
@@ -38,7 +40,8 @@ function boot(){
     cancel();if(timer)clearInterval(timer);if(loadingTimer)clearTimeout(loadingTimer);timer=undefined;loadingTimer=undefined;
     for(const dispose of disposers.splice(0))dispose();
     if(track&&originalMode&&track.mode==='hidden')track.mode=originalMode;
-    host?.remove();host=undefined;original=undefined;translated=undefined;card=undefined;menu=undefined;menuToggle=undefined;menuOpen=false;pager=undefined;content=undefined;drag=undefined;pendingLayout=undefined;pageKey='';video=undefined;track=undefined;entries.clear();current=[];ytTracker.reset();
+    if(menuHideTimer){clearTimeout(menuHideTimer);menuHideTimer=undefined;}hoveringOverlay=false;
+    host?.remove();host=undefined;original=undefined;translated=undefined;card=undefined;menu=undefined;menuToggle=undefined;menuOpen=false;quickOriginalBtn=undefined;quickLockBtn=undefined;pager=undefined;content=undefined;drag=undefined;pendingLayout=undefined;pageKey='';video=undefined;track=undefined;entries.clear();current=[];ytTracker.reset();ytStreamRequestId='';ytStreamText='';
     lastError='';status={...status,state:'stopped',message};
     notifyPlayer();
   }
@@ -46,23 +49,94 @@ function boot(){
     const videos=[...document.querySelectorAll('video')].filter(v=>{const r=v.getBoundingClientRect();return r.width>40&&r.height>30;});
     return videos.sort((a,b)=>{const x=a.getBoundingClientRect(),y=b.getBoundingClientRect();return y.width*y.height-x.width*x.height;})[0];
   }
+  function scheduleMenuAutoHide(){
+    if(menuHideTimer){clearTimeout(menuHideTimer);menuHideTimer=undefined;}
+    if(!menuOpen||hoveringOverlay||drag)return;
+    menuHideTimer=setTimeout(()=>{
+      menuHideTimer=undefined;
+      if(menuOpen&&!hoveringOverlay&&!drag&&!card?.matches(':has(:focus-visible)')){menuOpen=false;render();}
+    },3200);
+  }
+  function blurMouseClick(event:MouseEvent){
+    if(event.detail>0&&event.currentTarget instanceof HTMLElement)event.currentTarget.blur();
+  }
+  function quickPatch(patch:Partial<CaptionLayout>){
+    layoutEpoch++;
+    useLayout({...layout,...patch});
+    render();
+    void rpc<CaptionLayout>({type:'caption:quick',patch}).then(s=>{useLayout(s);render();}).catch(()=>{});
+  }
+  function applyCardAppearance(){
+    if(!card)return;
+    const styleMode=layout.style??'glass';
+    const op=clamp(layout.opacity,0.1,1);
+    card.dataset.style=styleMode;
+    if(styleMode==='minimal'){
+      card.style.background='transparent';
+      card.style.backdropFilter='none';
+      card.style.setProperty('-webkit-backdrop-filter','none');
+      card.style.borderColor='transparent';
+      card.style.boxShadow='none';
+      return;
+    }
+    if(styleMode==='solid'){
+      card.style.background=`rgba(10,12,18,${Math.max(0.55,op)})`;
+      card.style.backdropFilter='none';
+      card.style.setProperty('-webkit-backdrop-filter','none');
+      card.style.borderColor='rgba(255,255,255,0.08)';
+      card.style.boxShadow='0 6px 20px rgba(0,0,0,0.42)';
+      return;
+    }
+    // Glass mode: scale blur, border and shadow gracefully with opacity so low-opacity stays airy.
+    const lowFactor=clamp((op-0.12)/0.68,0,1);
+    const blurPx=Math.round(lowFactor*14);
+    const borderAlpha=(0.03+lowFactor*0.08).toFixed(3);
+    const topLight=(0.04+lowFactor*0.1).toFixed(3);
+    const shadowAlpha=(lowFactor*0.3).toFixed(3);
+    card.style.background=`rgba(14,18,26,${op})`;
+    const blurVal=blurPx>0?`blur(${blurPx}px) saturate(${(1+lowFactor*0.18).toFixed(2)})`:'none';
+    card.style.backdropFilter=blurVal;
+    card.style.setProperty('-webkit-backdrop-filter',blurVal);
+    card.style.borderColor=`rgba(255,255,255,${borderAlpha})`;
+    card.style.boxShadow=blurPx>0?`0 8px 26px rgba(0,0,0,${shadowAlpha}), inset 0 1px 0 rgba(255,255,255,${topLight})`:'none';
+  }
   function overlay(){
     host=document.createElement('div');host.dataset.siOwned='video';host.style.cssText='position:fixed;z-index:2147483647;pointer-events:none;';
     const shadow=host.attachShadow({mode:'closed'}),style=document.createElement('style');
     for(const type of ['click','keydown','pointerdown'])shadow.addEventListener(type,e=>e.stopPropagation());
-    style.textContent=':host{all:initial;pointer-events:none;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{position:relative;display:flex;align-items:center;justify-content:center;box-sizing:border-box;font:600 22px/1.48 "Segoe UI",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;text-align:center;color:#f8fafc;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 2px rgba(0,0,0,.88),0 2px 8px rgba(0,0,0,.55);padding:10px 16px;border-radius:12px;border:1px solid rgba(255,255,255,.12);backdrop-filter:blur(12px);-webkit-backdrop-filter:blur(12px);box-shadow:0 8px 28px rgba(0,0,0,.32);transition:border-color .16s ease}.caption:hover,.caption:focus-within,.caption.moving{border-color:rgba(255,255,255,.26)}.caption:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}.content{width:100%;min-width:0}.prev-line{font-size:.76em;font-weight:400;opacity:.68;margin-bottom:6px;line-height:1.4}.source{font-size:.78em;font-weight:400;opacity:.88;line-height:1.42}.target{margin-top:4px;line-height:1.46}.target:empty{display:none}button{pointer-events:auto;font:500 12px/1.3 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:#f1f5f9;background:rgba(30,34,43,.92);border:1px solid rgba(255,255,255,.14);border-radius:7px;padding:4px 9px;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,opacity .16s ease}button:hover{background:rgba(44,50,64,.98);border-color:rgba(255,255,255,.28)}button:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}.menu-toggle{position:absolute;right:0;bottom:calc(100% + 4px);z-index:2;opacity:0;padding:2px 8px;line-height:1.35;min-height:22px;background:rgba(18,22,30,.88);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:7px}.caption:hover .menu-toggle,.caption:focus-within .menu-toggle,.menu-toggle:hover,.menu-toggle:focus-visible,.menu-toggle[aria-expanded=true]{opacity:1}.menu{position:absolute;left:0;right:0;bottom:calc(100% + 30px);z-index:2;display:flex;flex-direction:column;gap:8px;padding:8px 10px;border-radius:11px;background:rgba(18,22,30,.94);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.14);box-shadow:0 12px 32px rgba(0,0,0,.45);pointer-events:auto;text-shadow:none}.caption.menu-below .menu-toggle{bottom:auto;top:calc(100% + 4px)}.caption.menu-below .menu{bottom:auto;top:calc(100% + 30px)}.pages{font:12px/1.4 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;margin-top:0;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 8px;color:#cbd5e1}.pages + .pages{padding-top:8px;border-top:1px solid rgba(255,255,255,.1)}.note{font-weight:400;color:#94a3b8;font-size:11.5px}.caption:not(.locked){pointer-events:auto;cursor:grab;touch-action:none;user-select:none}.caption.moving{cursor:grabbing}.resize{position:absolute;width:18px;height:18px;padding:0;border:0;background:transparent;touch-action:none;opacity:0;transition:opacity .16s ease,background-color .15s ease}.resize:after{content:"";position:absolute;inset:4px;border:solid rgba(241,245,249,.82);border-width:0 2px 2px 0;border-radius:1px}.caption:hover .resize,.caption:focus-within .resize,.caption.moving .resize{opacity:.78}.resize:hover,.resize:focus-visible{opacity:1!important;background:rgba(255,255,255,.14)}.nw{top:0;left:0;cursor:nwse-resize}.ne{top:0;right:0;cursor:nesw-resize}.sw{bottom:0;left:0;cursor:nesw-resize}.se{bottom:0;right:0;cursor:nwse-resize}.nw:after{transform:rotate(180deg)}.ne:after{transform:rotate(270deg)}.sw:after{transform:rotate(90deg)}.locked .resize{display:none}@media(prefers-reduced-motion:reduce){*{transition:none!important}}';
+    style.textContent=':host{all:initial;pointer-events:none;font-family:"Segoe UI",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif}:host([hidden]){display:none!important}[hidden]{display:none!important}.caption{position:relative;display:flex;align-items:center;justify-content:center;box-sizing:border-box;font:600 22px/1.48 "Segoe UI",-apple-system,BlinkMacSystemFont,"PingFang SC","Hiragino Sans GB","Microsoft YaHei",system-ui,sans-serif;text-align:center;color:#f8fafc;overflow-wrap:anywhere;white-space:pre-line;text-shadow:0 1px 2px rgba(0,0,0,.9),0 2px 8px rgba(0,0,0,.6);padding:10px 16px;border-radius:12px;border:1px solid transparent;transition:border-color .18s ease,background-color .18s ease,box-shadow .18s ease}.caption[data-style=minimal]{text-shadow:0 0 4px rgba(0,0,0,.98),0 1px 3px rgba(0,0,0,.96),0 2px 10px rgba(0,0,0,.82)}.caption[data-style=minimal]:hover,.caption[data-style=minimal].moving,.caption[data-style=minimal]:has(:focus-visible){background:rgba(14,18,26,.46)!important;backdrop-filter:blur(8px)!important;-webkit-backdrop-filter:blur(8px)!important}.caption:hover,.caption.moving,.caption:has(:focus-visible){border-color:rgba(255,255,255,.24)!important}.caption:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}.content{width:100%;min-width:0}.prev-line{font-size:.75em;font-weight:400;opacity:.66;margin-bottom:5px;line-height:1.4}.source{font-size:.78em;font-weight:400;opacity:.88;line-height:1.42}.target{margin-top:4px;line-height:1.46}.target:empty{display:none}button{pointer-events:auto;font:500 12px/1.3 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;color:#f1f5f9;background:rgba(30,34,43,.92);border:1px solid rgba(255,255,255,.14);border-radius:7px;padding:4px 9px;cursor:pointer;transition:background-color .15s ease,border-color .15s ease,opacity .18s ease,color .15s ease}button:hover{background:rgba(44,50,64,.98);border-color:rgba(255,255,255,.28)}button:focus-visible{outline:2px solid #60a5fa;outline-offset:2px}button[aria-pressed=true]{background:rgba(37,99,235,.28);border-color:rgba(96,165,250,.55);color:#dbeafe}.menu-toggle{position:absolute;right:0;bottom:calc(100% + 4px);z-index:2;opacity:0;padding:2px 8px;line-height:1.35;min-height:22px;background:rgba(18,22,30,.86);backdrop-filter:blur(10px);-webkit-backdrop-filter:blur(10px);border-radius:7px}.caption:hover .menu-toggle,.caption:has(:focus-visible) .menu-toggle,.menu-toggle:hover,.menu-toggle:focus-visible,.menu-toggle[aria-expanded=true]{opacity:1}.menu{position:absolute;left:0;right:0;bottom:calc(100% + 30px);z-index:2;display:flex;flex-direction:column;gap:7px;padding:8px 10px;border-radius:11px;background:rgba(16,20,28,.93);backdrop-filter:blur(14px);-webkit-backdrop-filter:blur(14px);border:1px solid rgba(255,255,255,.13);box-shadow:0 12px 32px rgba(0,0,0,.46);pointer-events:auto;text-shadow:none}.caption.menu-below .menu-toggle{bottom:auto;top:calc(100% + 4px)}.caption.menu-below .menu{bottom:auto;top:calc(100% + 30px)}.pages{font:12px/1.4 "Segoe UI",-apple-system,"PingFang SC","Microsoft YaHei",system-ui,sans-serif;margin-top:0;display:flex;align-items:center;justify-content:center;flex-wrap:wrap;gap:6px 8px;color:#cbd5e1}.pages + .pages{padding-top:7px;border-top:1px solid rgba(255,255,255,.09)}.note{font-weight:400;color:#94a3b8;font-size:11px}.caption:not(.locked){pointer-events:auto;cursor:grab;touch-action:none;user-select:none}.caption.moving{cursor:grabbing}.resize{position:absolute;width:18px;height:18px;padding:0;border:0;background:transparent;touch-action:none;opacity:0;transition:opacity .18s ease,background-color .15s ease}.resize:after{content:"";position:absolute;inset:4px;border:solid rgba(241,245,249,.82);border-width:0 2px 2px 0;border-radius:1px}.caption:hover .resize,.caption:has(:focus-visible) .resize,.caption.moving .resize{opacity:.78}.resize:hover,.resize:focus-visible{opacity:1!important;background:rgba(255,255,255,.14)}.nw{top:0;left:0;cursor:nwse-resize}.ne{top:0;right:0;cursor:nesw-resize}.sw{bottom:0;left:0;cursor:nesw-resize}.se{bottom:0;right:0;cursor:nwse-resize}.nw:after{transform:rotate(180deg)}.ne:after{transform:rotate(270deg)}.sw:after{transform:rotate(90deg)}.locked .resize{display:none}@media(prefers-reduced-motion:reduce){*{transition:none!important}}';
     card=document.createElement('div');card.className='caption';original=document.createElement('div');original.className='source';translated=document.createElement('div');translated.className='target';
     previousLine=document.createElement('div');previousLine.className='prev-line';previousLine.hidden=true;
     liveTools=document.createElement('div');liveTools.className='pages';liveTools.hidden=true;
     const back=document.createElement('button'),forward=document.createElement('button'),latestButton=document.createElement('button');holdButton=document.createElement('button');liveHint=document.createElement('span');
-    back.textContent='‹';back.setAttribute('aria-label','上一条译文');back.onclick=()=>{reader.back(Date.now());pageKey='';render();};forward.textContent='›';forward.setAttribute('aria-label','下一条译文');forward.onclick=()=>{reader.forward(Date.now());pageKey='';render();};
-    holdButton.onclick=()=>{reader.paused=!reader.paused;render();};const pauseNote=document.createElement('span');pauseNote.className='note';pauseNote.textContent=PAUSE_SCROLL_NOTE;latestButton.textContent='回到最新';latestButton.onclick=()=>{reader.latest(Date.now());pageKey='';render();};liveTools.append(back,holdButton,pauseNote,forward,latestButton,liveHint);
+    back.textContent='‹';back.setAttribute('aria-label','上一条译文');back.onclick=e=>{blurMouseClick(e);reader.back(Date.now());pageKey='';render();scheduleMenuAutoHide();};
+    forward.textContent='›';forward.setAttribute('aria-label','下一条译文');forward.onclick=e=>{blurMouseClick(e);reader.forward(Date.now());pageKey='';render();scheduleMenuAutoHide();};
+    holdButton.onclick=e=>{blurMouseClick(e);reader.paused=!reader.paused;render();scheduleMenuAutoHide();};
+    const pauseNote=document.createElement('span');pauseNote.className='note';pauseNote.textContent=PAUSE_SCROLL_NOTE;
+    latestButton.textContent='回到最新';latestButton.onclick=e=>{blurMouseClick(e);reader.latest(Date.now());pageKey='';render();scheduleMenuAutoHide();};
+    liveTools.append(back,holdButton,pauseNote,forward,latestButton,liveHint);
     menuToggle=document.createElement('button');menuToggle.className='menu-toggle';menuToggle.type='button';menuToggle.hidden=true;menuToggle.textContent='⋯';menuToggle.title='字幕操作';menuToggle.setAttribute('aria-label','字幕操作');menuToggle.setAttribute('aria-haspopup','true');menuToggle.setAttribute('aria-expanded','false');
     menu=document.createElement('div');menu.className='menu';menu.hidden=true;menu.setAttribute('role','group');menu.setAttribute('aria-label','字幕操作');
     pager=document.createElement('div');pager.className='pages';
     const previous=document.createElement('button'),next=document.createElement('button'),count=document.createElement('span');previous.textContent='‹';next.textContent='›';previous.setAttribute('aria-label','上一页字幕');next.setAttribute('aria-label','下一页字幕');
-    const turn=(delta:number)=>{pageIndex=(pageIndex+delta+pageCount)%pageCount;pageAt=Date.now();render();};previous.onclick=()=>turn(-1);next.onclick=()=>turn(1);pager.append(previous,count,next);
-    menu.append(pager,liveTools);menuToggle.onclick=()=>{menuOpen=!menuOpen;render();};
+    const turn=(delta:number)=>{pageIndex=(pageIndex+delta+pageCount)%pageCount;pageAt=Date.now();render();scheduleMenuAutoHide();};
+    previous.onclick=e=>{blurMouseClick(e);turn(-1);};next.onclick=e=>{blurMouseClick(e);turn(1);};pager.append(previous,count,next);
+    const quickBar=document.createElement('div');quickBar.className='pages';
+    quickOriginalBtn=document.createElement('button');quickOriginalBtn.type='button';quickOriginalBtn.textContent='原文';quickOriginalBtn.title='切换同时显示原文';
+    quickOriginalBtn.onclick=e=>{blurMouseClick(e);quickPatch({showOriginal:!layout.showOriginal});scheduleMenuAutoHide();};
+    const fontDown=document.createElement('button'),fontUp=document.createElement('button');
+    fontDown.type='button';fontDown.textContent='A-';fontDown.setAttribute('aria-label','减小字号');fontDown.onclick=e=>{blurMouseClick(e);quickPatch({fontSize:clamp(layout.fontSize-2,14,40)});scheduleMenuAutoHide();};
+    fontUp.type='button';fontUp.textContent='A+';fontUp.setAttribute('aria-label','增大字号');fontUp.onclick=e=>{blurMouseClick(e);quickPatch({fontSize:clamp(layout.fontSize+2,14,40)});scheduleMenuAutoHide();};
+    quickLockBtn=document.createElement('button');quickLockBtn.type='button';quickLockBtn.textContent='锁定';quickLockBtn.title='锁定位置和尺寸';
+    quickLockBtn.onclick=e=>{blurMouseClick(e);quickPatch({locked:!layout.locked});scheduleMenuAutoHide();};
+    quickBar.append(quickOriginalBtn,fontDown,fontUp,quickLockBtn);
+    menu.append(pager,liveTools,quickBar);
+    menuToggle.onclick=e=>{blurMouseClick(e);menuOpen=!menuOpen;render();if(menuOpen)scheduleMenuAutoHide();else if(menuHideTimer){clearTimeout(menuHideTimer);menuHideTimer=undefined;}};
+    card.addEventListener('pointerenter',()=>{hoveringOverlay=true;if(menuHideTimer){clearTimeout(menuHideTimer);menuHideTimer=undefined;}});
+    card.addEventListener('pointerleave',()=>{hoveringOverlay=false;scheduleMenuAutoHide();});
+    const outsideClose=(e:PointerEvent)=>{if(menuOpen&&host&&!e.composedPath().includes(host)){menuOpen=false;if(menuHideTimer){clearTimeout(menuHideTimer);menuHideTimer=undefined;}render();}};
+    document.addEventListener('pointerdown',outsideClose,{capture:true,passive:true});
+    disposers.push(()=>document.removeEventListener('pointerdown',outsideClose,{capture:true}));
     card.onpointerdown=e=>{if(!(e.target instanceof Element)||e.target.closest('button,a,input,select,textarea,.menu'))return;beginGesture(e);};
     card.onpointermove=e=>moveGesture(e);card.onpointerup=e=>{if(e.pointerId===drag?.pointerId)finishGesture();};card.onpointercancel=e=>{if(e.pointerId===drag?.pointerId)finishGesture(true);};
     card.onlostpointercapture=()=>finishGesture(true);
@@ -114,8 +188,8 @@ function boot(){
     const full=document.fullscreenElement,parent=full&&video?.isConnected&&full.contains(video)&&full.tagName!=='VIDEO'?full:document.documentElement;
     if(host.parentElement!==parent)parent.append(host);
     const rect=video?.isConnected?video.getBoundingClientRect():new DOMRect(0,0,innerWidth,innerHeight);
-    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(16,20,28,${layout.opacity})`;
-    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;card.classList.toggle('menu-below',positioned.top<96);
+    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.fontSize=`${layout.fontSize}px`;applyCardAppearance();
+    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;card.classList.toggle('menu-below',positioned.top<120);
   }
   function paintRestartHint(){
     if(!host||!translated)return;
@@ -147,9 +221,11 @@ function boot(){
     const active=reader.current,rect=video?.getBoundingClientRect()??new DOMRect(0,0,innerWidth,innerHeight);
     const ytDisplay=!liveSession&&youtube?ytTracker.display():undefined;
     const source=liveSession?(active?.source??livePreview):ytDisplay?ytDisplay.source:current.map(c=>c.text).join('\n');
-    const texts=liveSession?(active?.text??''):ytDisplay?ytDisplay.translation:current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
+    const texts=liveSession?(active?.text??''):ytDisplay?(ytDisplay.translation||ytStreamText):current.map(c=>entries.get(c.id)?.text??'').filter(Boolean).join('\n');
     if(drag&&drag.full!==!!full)finishGesture(true);
-    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.minHeight=bounds.height?`${Math.min(bounds.height,bounds.areaHeight)}px`:'';card.style.fontSize=`${layout.fontSize}px`;card.style.background=`rgba(16,20,28,${layout.opacity})`;card.classList.toggle('locked',layout.locked);card.classList.toggle('moving',!!drag?.moved);card.tabIndex=layout.locked?-1:0;
+    const bounds=captionBounds(rect,innerWidth,innerHeight,layout,0,!!full);host.style.width=`${bounds.width}px`;card.style.minHeight=bounds.height?`${Math.min(bounds.height,bounds.areaHeight)}px`:'';card.style.fontSize=`${layout.fontSize}px`;applyCardAppearance();card.classList.toggle('locked',layout.locked);card.classList.toggle('moving',!!drag?.moved);card.tabIndex=layout.locked?-1:0;
+    if(quickOriginalBtn)quickOriginalBtn.setAttribute('aria-pressed',String(layout.showOriginal));
+    if(quickLockBtn){quickLockBtn.setAttribute('aria-pressed',String(layout.locked));quickLockBtn.textContent=layout.locked?'已锁定':'锁定';}
     const limit=Math.max(12,Math.floor((bounds.width-28)/layout.fontSize)*3),targets=captionPages(texts,limit),sources=captionPages(layout.showOriginal||!texts?source:'',Math.floor(limit/ .78));
     pageCount=Math.max(targets.length,sources.length);const key=(liveSession?active?.id??'preview':source+'\0'+texts)+'\0'+limit;
     if(key!==pageKey){pageKey=key;pageIndex=0;pageAt=Date.now();}
@@ -166,7 +242,7 @@ function boot(){
     const unsupported=full?.tagName==='VIDEO'||document.pictureInPictureElement===video;
     host.hidden=!source||(layout.mode==='video'&&(rect.bottom<0||rect.top>innerHeight||rect.width<40))||unsupported;
     if(unsupported)status.message='原生视频全屏和画中画暂不支持叠加字幕，请使用网页播放器全屏。';
-    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;card.classList.toggle('menu-below',positioned.top<96);
+    const positioned=captionBounds(rect,innerWidth,innerHeight,layout,host.getBoundingClientRect().height,!!full);host.style.left=`${positioned.left}px`;host.style.top=`${positioned.top}px`;card.classList.toggle('menu-below',positioned.top<120);
     if(liveSession){for(const cue of reader.dropped.splice(0))if(cue.traceId)void rpc({type:'speech:paint',sessionId:liveSession,traceId:cue.traceId,skipped:true}).catch(()=>{});
       if(active?.traceId&&!painted.has(active.traceId)&&!host.hidden&&!paintScheduled&&document.visibilityState==='visible'){
         paintScheduled=true;const run=generation,cue=active;requestAnimationFrame(()=>requestAnimationFrame(()=>{paintScheduled=false;if(run!==generation||reader.current?.version!==cue.version||host?.hidden||document.visibilityState!=='visible')return;painted.add(cue.traceId!);if(painted.size>100)painted.delete(painted.values().next().value!);void rpc({type:'speech:paint',sessionId:liveSession,traceId:cue.traceId,at:Date.now(),arrivedAt:cue.arrivedAt,sourceEndAt:cue.sourceEndAt}).catch(()=>{});}));
@@ -246,19 +322,21 @@ function boot(){
       if(!pending.length)return;
       ytTracker.markDispatched();
       working=true;const run=generation,thisTask=task;
-      const requestId=crypto.randomUUID(),timeout=setTimeout(()=>{if(run===generation){cancel();ytTracker.markFailed(pending.map(p=>p.text));lastError=status.message='字幕翻译超时，保留原文。可点击重试。';render();}},15000);
+      const requestId=crypto.randomUUID();ytStreamRequestId=pending.length===1?requestId:'';ytStreamText='';
+      const timeout=setTimeout(()=>{if(run===generation){cancel();ytStreamRequestId='';ytStreamText='';ytTracker.markFailed(pending.map(p=>p.text));lastError=status.message='字幕翻译超时，保留原文。可点击重试。';render();}},15000);
       try{
         const result=await rpc<TranslationResult>({type:'translate',input:{kind:'subtitle',taskId:thisTask,requestId,profileId:config.profileId,target:config.target,
           blocks:pending.map((p,i)=>({id:`yt-${i}`,context:p.context,segments:[{id:`yt-seg-${i}`,text:p.text}]}))}});
         if(run!==generation||status.state!=='active')return;
+        ytStreamRequestId='';ytStreamText='';
         const output=new Map(result.segments.map(s=>[s.id,s.text]));
         const resolved:Array<{source:string;translation:string}>=[],failedSources:string[]=[];
         pending.forEach((p,i)=>{const text=output.get(`yt-seg-${i}`);if(text){resolved.push({source:p.text,translation:text});status.completed++;}else failedSources.push(p.text);});
         if(resolved.length)ytTracker.applyTranslations(resolved,Date.now());
         if(failedSources.length)ytTracker.markFailed(failedSources);
         lastError='';status.message='正在翻译播放器显示的字幕。';render();
-      }catch(error){if(run===generation){ytTracker.markFailed(pending.map(p=>p.text));lastError=status.message=(error instanceof Error?error.message:'字幕翻译失败。')+' 可点击重试，原文仍保留。';render();}}
-      finally{clearTimeout(timeout);if(run===generation){working=false;void pump();}}
+      }catch(error){if(run===generation){ytStreamRequestId='';ytStreamText='';ytTracker.markFailed(pending.map(p=>p.text));lastError=status.message=(error instanceof Error?error.message:'字幕翻译失败。')+' 可点击重试，原文仍保留。';render();}}
+      finally{clearTimeout(timeout);if(run===generation){ytStreamRequestId='';working=false;void pump();}}
       return;
     }
     const now=video.currentTime,horizon=now+Math.min(90,30*Math.max(1,video.playbackRate));
@@ -299,6 +377,7 @@ function boot(){
   chrome.runtime.onMessage.addListener((m,sender,respond)=>{
     if(sender.id!==chrome.runtime.id||!m?.type?.startsWith('video:'))return;
     if(m.type==='video:layout'){layoutEpoch++;if(drag){pendingLayout=m.layout;if(m.layout.locked)finishGesture(true);}else{useLayout(m.layout);render();}respond(true);return;}
+    if(m.type==='video:subtitle-progress'){if(!liveSession&&youtube&&m.requestId&&m.requestId===ytStreamRequestId&&typeof m.text==='string'){ytStreamText=m.text;render();}respond(true);return;}
     if(m.type==='video:get-status'){status.bilingual=layout.showOriginal;respond(status);return;}
     if(m.type==='video:player-status'){respond({state:liveSession?'stopped':status.state,message:liveSession?'':status.message});return;}
     if(m.type==='video:live-start'){

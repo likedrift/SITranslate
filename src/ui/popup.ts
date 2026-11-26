@@ -6,17 +6,21 @@ import {PAUSE_SCROLL_POPUP_NOTE,STREAM_OFF_WARNING} from '../core/live-hints';
 el('caption-pause-note').textContent=PAUSE_SCROLL_POPUP_NOTE;
 let settings:Settings;let busy=false;let currentTab:chrome.tabs.Tab|undefined;
 const IDLE_VIDEO_COPY='有字幕的视频可开启翻译。';
+function setBadge(id:string,text:string,live=false){
+  const node=el(id);node.textContent=text;node.hidden=!text;node.classList.toggle('live',live);
+}
 async function refreshSelection(){
   const button=el<HTMLButtonElement>('grant-site');
   try{
     const state=await rpc<{enabled:boolean;supported:boolean}>('selection:state',{url:currentTab?.url??''});
     button.dataset.enabled=String(state.enabled);
     button.dataset.supported=String(state.supported);
-    if(!state.supported){button.disabled=true;button.textContent='当前页面不支持划词';return;}
+    if(!state.supported){button.disabled=true;button.textContent='当前页面不支持划词';setBadge('selection-badge','');return;}
     button.disabled=false;
     button.textContent=state.enabled?'划词已开启 · 管理网站':'开启所有网站划词';
+    setBadge('selection-badge',state.enabled?'已开启':'');
   }catch(err){
-    button.disabled=true;button.dataset.enabled='false';button.textContent='无法读取划词状态';
+    button.disabled=true;button.dataset.enabled='false';button.textContent='无法读取划词状态';setBadge('selection-badge','');
     error(err instanceof Error?err.message:'无法读取划词状态。');
   }
 }
@@ -40,6 +44,7 @@ function paint(s:PageStatus){
   el('detail').textContent=detail;el('detail').hidden=!detail;
   el('progress-card').hidden=s.state==='idle'&&!detail&&!s.failed&&!s.total;
   el<HTMLButtonElement>('stop').disabled=!['scanning','translating','watching'].includes(s.state);
+  el<HTMLButtonElement>('restore').disabled=s.state==='idle'&&!s.completed&&!s.total;
   el('retry').hidden=!s.failed;el<HTMLButtonElement>('translate').disabled=busy||['scanning','translating'].includes(s.state);
 }
 async function refresh(){try{paint(await rpc<PageStatus>('tab:status'));}catch(err){error(err instanceof Error?err.message:'无法访问当前页面。');}}
@@ -49,6 +54,7 @@ function paintVideo(s:VideoStatus){
   const idle=s.state==='idle';
   el('video-state').textContent=[s.source,message,s.completed?`已翻译 ${s.completed} 条字幕`:''].filter(Boolean).join(' · ')||(idle?'未开始':'');
   el('video-state').hidden=idle;
+  setBadge('video-badge',s.state==='active'?'运行中':s.state==='loading'?'读取中':'',s.state==='active'||s.state==='loading');
   if(!idle&&s.state!=='loading')openFold('video-fold');
   el<HTMLButtonElement>('video-stop').disabled=!['loading','active'].includes(s.state);
   el('video-retry').hidden=s.state!=='active'||s.source==='标签页音频';
@@ -69,6 +75,7 @@ el('video-bilingual').addEventListener('change',()=>void videoAction('display'))
 async function action(action:string){busy=true;error('');el<HTMLButtonElement>('translate').disabled=true;try{await preferences();await rpc('tab:action',{action});await refresh();}catch(err){error(err instanceof Error?err.message:'操作失败。');}finally{busy=false;el<HTMLButtonElement>('translate').disabled=false;}}
 el('settings').addEventListener('click',()=>chrome.runtime.openOptionsPage());
 el('setup-action').addEventListener('click',()=>chrome.runtime.openOptionsPage());
+el('shortcut-key').addEventListener('click',()=>void chrome.tabs.create({url:'chrome://extensions/shortcuts'}));
 for(const [id,act]of [['translate','start'],['stop','stop'],['restore','restore'],['retry','retry']])el(id).addEventListener('click',()=>void action(act));
 document.querySelectorAll('input[name="display"]').forEach(input=>input.addEventListener('change',async()=>{try{await preferences();await rpc('tab:action',{action:'display'});}catch(err){error(err instanceof Error?err.message:'无法切换显示。');}}));
 for(const id of ['target','profile'])el(id).addEventListener('change',()=>{if(id==='profile')paintStreamWarning();preferences().catch(err=>error(err.message));});
@@ -109,14 +116,14 @@ chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Objec
 chrome.permissions.onAdded.addListener(()=>void refreshSelection());
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection());
 void init().catch(err=>error(err.message));
-setInterval(()=>void refreshVideo(),1000);
-async function refreshSpeech(){try{const s=speechStatusOrIdle(await rpc<SpeechStatus>('speech:status'));const base=s.state==='idle'?'未开始':s.message;const restart=/开始实时翻译/.test(s.message)&&['stopped','error'].includes(s.state);el('speech-state').hidden=s.state==='idle';el('speech-state').textContent=restart?s.message:base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el('speech-state').className=restart?'status attention':'status';if(s.state!=='idle')openFold('speech-fold');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
+async function refreshSpeech(){try{const s=speechStatusOrIdle(await rpc<SpeechStatus>('speech:status'));const base=s.state==='idle'?'未开始':s.message;const restart=/开始实时翻译/.test(s.message)&&['stopped','error'].includes(s.state);el('speech-state').hidden=s.state==='idle';el('speech-state').textContent=restart?s.message:base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el('speech-state').className=restart?'status attention':'status';setBadge('speech-badge',s.state==='active'?'运行中':s.state==='connecting'?'连接中':'',s.state==='active'||s.state==='connecting');if(s.state!=='idle')openFold('speech-fold');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
 el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();settings=await rpc<Settings>('settings:get');paintStreamWarning();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
 el('speech-stop').addEventListener('click',()=>void rpc('speech:stop').then(refreshSpeech).catch(e=>error(e.message)));
 el('speech-settings').addEventListener('click',event=>{event.preventDefault();event.stopPropagation();void chrome.tabs.create({url:chrome.runtime.getURL('options.html#speech')});});
-void refreshSpeech();setInterval(()=>void refreshSpeech(),1000);
-function paintCaption(s:CaptionLayout){if(!s)return;for(const [id,n,unit] of [['font',s.fontSize,'px'],['width',s.width,'%'],['opacity',Math.round(s.opacity*100),'%']] as const){if(document.activeElement!==el(`caption-${id}`))el<HTMLInputElement>(`caption-${id}`).value=String(n);el(`caption-${id}-label`).textContent=n+unit;}el<HTMLSelectElement>('caption-mode').value=s.mode;el<HTMLSelectElement>('caption-reading').value=s.readingMode??'balanced';el<HTMLInputElement>('caption-lock').checked=s.locked;el<HTMLInputElement>('video-bilingual').checked=s.showOriginal;}
+void refreshSpeech();
+function paintCaption(s:CaptionLayout){if(!s)return;for(const [id,n,unit] of [['font',s.fontSize,'px'],['width',s.width,'%'],['opacity',Math.round(s.opacity*100),'%']] as const){if(document.activeElement!==el(`caption-${id}`))el<HTMLInputElement>(`caption-${id}`).value=String(n);el(`caption-${id}-label`).textContent=n+unit;}el<HTMLSelectElement>('caption-style').value=s.style??'glass';el<HTMLSelectElement>('caption-mode').value=s.mode;el<HTMLSelectElement>('caption-reading').value=s.readingMode??'balanced';el<HTMLInputElement>('caption-lock').checked=s.locked;el<HTMLInputElement>('video-bilingual').checked=s.showOriginal;}
 for(const [id,key] of [['font','fontSize'],['width','width'],['opacity','opacity']] as const){const input=el<HTMLInputElement>(`caption-${id}`);input.addEventListener('input',()=>{el(`caption-${id}-label`).textContent=input.value+(id==='font'?'px':'%');});input.addEventListener('change',()=>void rpc('caption:save',{patch:{[key]:Number(input.value)/(id==='opacity'?100:1)}}).catch(e=>error(e.message)));}
+el('caption-style').addEventListener('change',()=>void rpc('caption:save',{patch:{style:value('caption-style')}}).catch(e=>error(e.message)));
 el('caption-mode').addEventListener('change',()=>void rpc('caption:save',{patch:{mode:value('caption-mode')}}).catch(e=>error(e.message)));
 el('caption-reading').addEventListener('change',()=>void rpc('caption:save',{patch:{readingMode:value('caption-reading')}}).catch(e=>error(e.message)));
 el('caption-lock').addEventListener('change',()=>void rpc('caption:save',{patch:{locked:el<HTMLInputElement>('caption-lock').checked}}).catch(e=>error(e.message)));
@@ -125,4 +132,9 @@ async function refreshDiagnostics(){try{const d=await rpc<any>('speech:diagnosti
 el('speech-diagnostics').addEventListener('toggle',()=>{if((el('speech-diagnostics') as HTMLDetailsElement).open)void refreshDiagnostics();});
 el('speech-diagnostics-clear').addEventListener('click',()=>void rpc('speech:diagnostics-clear').then(refreshDiagnostics).catch(e=>error(e.message)));
 el('speech-diagnostics-export').addEventListener('click',async()=>{try{const d=await rpc<any>('speech:diagnostics');const url=URL.createObjectURL(new Blob([JSON.stringify({...d,exportedAt:new Date().toISOString(),notes:['仅本地最近100段数字计时，无原文/译文/音频/Key/网址。术语只记录是否启用。','首Token不等于首段可显示译文。','ASR及句末到上屏由上传音频帧与ASR时间戳估算，缺失时不计，排除YouTube/CDN延迟。','上屏使用可见页连续两次requestAnimationFrame估算，非硬件呈现时间。']},null,2)],{type:'application/json'}));const a=document.createElement('a');a.href=url;a.download='si-translate-latency.json';a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){error(e instanceof Error?e.message:'导出失败。');}});
-setInterval(()=>{if((el('speech-diagnostics') as HTMLDetailsElement).open)void refreshDiagnostics();},1000);
+// Single consolidated 1 s ticker for active popup panels.
+setInterval(()=>{
+  void refreshVideo();
+  void refreshSpeech();
+  if((el('speech-diagnostics') as HTMLDetailsElement).open)void refreshDiagnostics();
+},1000);

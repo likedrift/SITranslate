@@ -47,12 +47,18 @@ function connect(run:number){
     }
   };
   ws.onerror=()=>{};
-  ws.onclose=()=>{
+  ws.onclose=event=>{
     if(run!==generation||socket!==ws)return;if(connectTimer)clearTimeout(connectTimer);connectTimer=undefined;
     const wasReady=ready;ready=false;preroll.clear(); // Drop the dead socket's audio. Later frames refill at most ~2s and flush on the next ready.
     if(wasReady&&Date.now()-connectedAt>30000)retries=0;
-    if((wasReady||retries>0)&&retries<2&&!testing){retries++;void notify('speech:warning',{reconnecting:true,message:`语音连接中断，正在重连（${retries}/2）；就绪后只补最近约 2 秒。`});setTimeout(()=>{if(socket===ws)connect(run);},retries*1000);}
-    else void fail('语音连接失败或已断开。请检查百炼地域、Key、余额或网络，再点击开始。');
+    const fatalCode=event.code===1008||event.code===4001||event.code===4003;
+    const maxRetries=4;
+    if(!fatalCode&&(wasReady||retries>0)&&retries<maxRetries&&!testing){
+      retries++;
+      const delayMs=Math.min(8000,1000*2**(retries-1));
+      void notify('speech:warning',{reconnecting:true,message:`语音连接中断，正在重连（${retries}/${maxRetries}）；就绪后只补最近约 2 秒。`});
+      setTimeout(()=>{if(socket===ws)connect(run);},delayMs);
+    }else void fail('语音连接失败或已断开。请检查百炼地域、Key、余额或网络，再点击开始。');
   };
 }
 async function start(m:any){
@@ -75,7 +81,7 @@ async function start(m:any){
     }catch{await fail('无法采集标签页声音。请重新加载扩展、刷新直播页，播放视频后从工具栏点击开始。');return;}
   }
   if(run!==generation)return;connect(run);
-  timer=setInterval(()=>{if(run===generation)void notify('speech:health',{seconds:Math.floor(seconds),sentBytes:bytes,hasAudio:seconds-lastSound<5&&lastSound>0,asrUsage});},1000);
+  timer=setInterval(()=>{if(run===generation){const hasAudio=seconds-lastSound<5&&lastSound>0;const silentSeconds=hasAudio?0:Math.floor(lastSound>0?seconds-lastSound:seconds);void notify('speech:health',{seconds:Math.floor(seconds),sentBytes:bytes,hasAudio,silentSeconds,asrUsage});}},1000);
 }
 chrome.runtime.onMessage.addListener((m,sender,respond)=>{
   if(m?.target!=='speech-offscreen'||sender.id!==chrome.runtime.id)return;

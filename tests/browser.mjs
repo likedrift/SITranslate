@@ -171,7 +171,7 @@ try{
   });
   await step('Display switch and restore keep website updates',async()=>{
     const settings=await rpc('settings:get');await rpc('preferences:save',{target:settings.target,display:'bilingual',profileId:settings.activeProfileId});await act('display');
-    assert.equal(await page.locator('#plain').evaluate(el=>el.firstChild.textContent),'Hello world.');assert.equal(await page.locator('#plain [data-si-owned=translation]').textContent(),'［你好，世界。］');
+    assert.equal(await page.locator('#plain').evaluate(el=>el.firstChild.textContent),'Hello world.');assert.equal(await page.locator('#plain [data-si-owned=translation]').textContent(),'你好，世界。');assert.equal(await page.locator('#plain [data-si-owned=translation]').evaluate(el=>getComputedStyle(el).display),'block');
     await page.locator('#changing').evaluate(el=>{el.textContent='Updated by the website.';});await act('restore');
     assert.equal(await page.locator('#plain').textContent(),'Hello world.');assert.equal(await page.locator('#changing').textContent(),'Updated by the website.');assert.equal(await page.locator('[data-si-owned=translation]').count(),0);
     await rpc('preferences:save',{target:settings.target,display:'replace',profileId:settings.activeProfileId});

@@ -186,6 +186,8 @@ test('provider uses configured endpoint and parameters and never returns reasoni
   globalThis.fetch=(async(url,options)=>{request={url,options};return new Response(JSON.stringify({choices:[{message:{reasoning_content:'private thoughts',content:JSON.stringify({segments:input.blocks[0].segments.map(s=>({id:s.id,text:'译文'}))})}}],usage:{prompt_tokens:100,completion_tokens:20}}),{headers:{'content-type':'application/json'}});})as typeof fetch;
   try{const result=await new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],apiKey:'test-only',stream:false,inputPrice:1,outputPrice:2},input,new AbortController().signal);
     assert.equal(result.segments.length,3);assert.equal(result.usage.estimatedCost,0.00014);assert.equal(request.url,'https://api.deepseek.com/chat/completions');assert.equal(request.options.credentials,'omit');assert.equal(request.options.redirect,'error');const body=JSON.parse(request.options.body);assert.deepEqual(body.thinking,{type:'disabled'});assert.match(body.messages[0].content,/untrusted data/);
+    await new CompatibleAdapter().translate({...DEFAULT_SETTINGS.profiles[0],type:'compatible',disableThinking:true,apiKey:'test-only',stream:false},input,new AbortController().signal);
+    const compatBody=JSON.parse(request.options.body);assert.equal(compatBody.enable_thinking,false);assert.equal(compatBody.thinking,undefined);
   }finally{globalThis.fetch=original;}
 });
 test('authentication failure is actionable, non-retryable, and does not expose provider response or key',async()=>{

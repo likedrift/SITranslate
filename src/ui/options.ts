@@ -5,10 +5,14 @@ import {rpc,el,value,check,languageOptions,sitePattern} from './client';
 import {normalizeSpeech,isStreaming,speechStatusOrIdle,vadSilenceMs,type SpeechSettings} from '../core/speech';
 let settings:Settings,editing='',origins:string[]=[],dirty=false,ready=false,speechReady=false;
 el('app-version').textContent=`VERSION ${chrome.runtime.getManifest().version}`;
+function setNavDirty(hash:string,on:boolean){
+  const link=document.querySelector<HTMLAnchorElement>(`.nav-link[href="${hash}"]`);
+  if(link)link.classList.toggle('has-dirty',on);
+}
 function feedback(text:string,state=''){const node=el('feedback');node.textContent=text;node.className=state;}
-function markDirty(text='有未保存的修改。'){dirty=true;feedback(text,'dirty');}
+function markDirty(text='有未保存的修改。'){dirty=true;setNavDirty('#providers',true);feedback(text,'dirty');}
 function localStatus(id:string,text:string,state=''){const node=el(id);node.textContent=text;node.className=state?`field-status ${state}`:'field-status';}
-function speechStatus(text:string,state=''){localStatus('speech-feedback',text,state);}
+function speechStatus(text:string,state=''){setNavDirty('#speech',state==='dirty');localStatus('speech-feedback',text,state);}
 function paintCaptionOriginal(showOriginal:boolean){el<HTMLInputElement>('caption-original').checked=showOriginal;}
 el('caption-original').addEventListener('change',()=>{
   const showOriginal=el<HTMLInputElement>('caption-original').checked;
@@ -20,18 +24,29 @@ function capture(){
     stream:check('stream'),jsonMode:check('json-mode'),disableThinking:check('disable-thinking'),inputPrice:Number(value('input-price'))||0,outputPrice:Number(value('output-price'))||0});
   if(check('is-active'))settings.activeProfileId=profile.id;
 }
+function syncSpeechProfiles(selected?:string){
+  const select=el<HTMLSelectElement>('speech-profile');
+  const current=selected!==undefined?selected:select.value;
+  select.replaceChildren();
+  const def=document.createElement('option');def.value='';def.textContent='跟随当前默认模型';select.append(def);
+  for(const profile of settings?.profiles??[]){
+    const opt=document.createElement('option');opt.value=profile.id;opt.textContent=`${profile.name||'未命名'}（${profile.model||'未填模型'}）`;select.append(opt);
+  }
+  select.value=settings?.profiles.some(p=>p.id===current)?current:'';
+}
 function profileList(){
   el('profile-list').replaceChildren();
   for(const profile of settings.profiles){const option=document.createElement('option');option.value=profile.id;option.textContent=`${profile.name||'未命名'}${profile.id===settings.activeProfileId?' · 默认':''}`;el('profile-list').append(option);}
   el<HTMLSelectElement>('profile-list').value=editing;
   el<HTMLButtonElement>('delete-profile').disabled=settings.profiles.length<=1;
+  syncSpeechProfiles();
 }
 function fillProfile(){
   const profile=settings.profiles.find(item=>item.id===editing);if(!profile)return;
   el<HTMLInputElement>('profile-name').value=profile.name;el<HTMLSelectElement>('profile-type').value=profile.type;el<HTMLInputElement>('base-url').value=profile.baseUrl;el<HTMLInputElement>('api-key').value=profile.apiKey;el<HTMLInputElement>('api-key').type='password';el('toggle-key').textContent='显示';el<HTMLInputElement>('model').value=profile.model;
   el<HTMLInputElement>('input-price').value=profile.inputPrice?String(profile.inputPrice):'';el<HTMLInputElement>('output-price').value=profile.outputPrice?String(profile.outputPrice):'';
   el<HTMLInputElement>('stream').checked=profile.stream;el<HTMLInputElement>('json-mode').checked=profile.jsonMode;el<HTMLInputElement>('disable-thinking').checked=profile.disableThinking;el<HTMLInputElement>('is-active').checked=profile.id===settings.activeProfileId;
-  el('thinking-row').hidden=profile.type!=='deepseek';profileList();
+  el('thinking-row').hidden=false;profileList();
 }
 function applyReading(){
   el<HTMLSelectElement>('target').value=settings.target;el<HTMLSelectElement>('display').value=settings.display;el<HTMLSelectElement>('max-chars').value=String(settings.maxPageChars);
@@ -53,7 +68,7 @@ async function persist(candidate:Settings,grant:Promise<boolean>){
   await rpc('settings:save',{settings:candidate});
   settings=await rpc<Settings>('settings:get');
   if(!settings.profiles.some(profile=>profile.id===editing))editing=settings.activeProfileId;
-  dirty=false;applyReading();fillProfile();feedback('设置已保存。','success');
+  dirty=false;setNavDirty('#providers',false);applyReading();fillProfile();feedback('设置已保存。','success');
 }
 // Permission requests are invoked synchronously from the submit/click handlers.
 function save(){const candidate=gather();const required=[...new Set(candidate.profiles.map(profile=>endpointFor(profile.baseUrl).permission))];const grant=chrome.permissions.request({origins:required});return persist(candidate,grant);}
@@ -74,7 +89,21 @@ el('settings-form').addEventListener('change',onSettingsEdit);
 el('reading').addEventListener('input',onSettingsEdit);
 el('reading').addEventListener('change',onSettingsEdit);
 el('profile-list').addEventListener('change',()=>{if(!settings)return;capture();editing=value('profile-list');fillProfile();});
-el('profile-type').addEventListener('change',()=>{el('thinking-row').hidden=value('profile-type')!=='deepseek';});
+el('profile-type').addEventListener('change',()=>{el('thinking-row').hidden=false;});
+const PROVIDER_PRESETS:Record<string,Omit<Profile,'id'|'apiKey'>>={
+  deepseek:{name:'DeepSeek',type:'deepseek',baseUrl:'https://api.deepseek.com',model:'deepseek-chat',stream:true,jsonMode:false,disableThinking:true,inputPrice:0,outputPrice:0},
+  dashscope:{name:'阿里云百炼',type:'compatible',baseUrl:'https://dashscope.aliyuncs.com/compatible-mode/v1',model:'qwen-flash',stream:true,jsonMode:false,disableThinking:true,inputPrice:0,outputPrice:0},
+  openai:{name:'OpenAI',type:'compatible',baseUrl:'https://api.openai.com/v1',model:'gpt-4o-mini',stream:true,jsonMode:false,disableThinking:false,inputPrice:0,outputPrice:0},
+  openrouter:{name:'OpenRouter',type:'compatible',baseUrl:'https://openrouter.ai/api/v1',model:'google/gemini-2.0-flash-001',stream:true,jsonMode:false,disableThinking:false,inputPrice:0,outputPrice:0},
+  ollama:{name:'本地 Ollama',type:'compatible',baseUrl:'http://127.0.0.1:11434/v1',model:'qwen2.5:7b',stream:true,jsonMode:false,disableThinking:false,inputPrice:0,outputPrice:0},
+};
+document.querySelectorAll<HTMLButtonElement>('[data-preset]').forEach(btn=>btn.addEventListener('click',()=>{
+  if(!settings)return;capture();
+  const preset=PROVIDER_PRESETS[btn.dataset.preset??''];if(!preset)return;
+  if(settings.profiles.length>=12){feedback('最多保存 12 个服务配置。','error');return;}
+  const profile:Profile={id:crypto.randomUUID(),apiKey:'',...preset};
+  settings.profiles.push(profile);editing=profile.id;fillProfile();markDirty(`已载入 ${preset.name} 预设，填写 API Key 后保存。`);
+}));
 el('is-active').addEventListener('change',()=>{
   if(!settings)return;
   if(!check('is-active')){
@@ -156,6 +185,7 @@ function paintSpeech(speech:SpeechSettings){
   for(const [id,key] of [['speech-key','apiKey'],['speech-endpoint','endpoint'],['speech-model','model'],['speech-language','language'],['speech-context','context']] as const)el<HTMLInputElement>(id).value=speech[key];
   el<HTMLInputElement>('speech-key').type='password';el('toggle-speech-key').textContent='显示';el('toggle-speech-key').setAttribute('aria-label','显示语音 API Key');
   el<HTMLSelectElement>('speech-vad').value=String(vadSilenceMs(speech.silenceDurationMs));
+  syncSpeechProfiles(speech.profileId??'');
   readSpeechAddress();speechModelHelp();
 }
 async function init(){
@@ -181,7 +211,8 @@ let speechBusy=false;
 async function saveSpeech(test=false){
   if(speechBusy)return;speechBusy=true;
   el<HTMLButtonElement>('speech-save').disabled=true;el<HTMLButtonElement>('speech-test').disabled=true;
-  const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim(),silenceDurationMs:Number(value('speech-vad')) as SpeechSettings['silenceDurationMs']};
+  const profileId=value('speech-profile').trim();
+  const data:SpeechSettings={apiKey:value('speech-key').trim(),endpoint:value('speech-endpoint').trim(),model:value('speech-model').trim(),language:value('speech-language') as SpeechSettings['language'],context:value('speech-context').trim(),silenceDurationMs:Number(value('speech-vad')) as SpeechSettings['silenceDurationMs'],...(profileId?{profileId}:{})};
   try{
     const next=normalizeSpeech(data);await rpc('speech:settings-save',{settings:next});el<HTMLInputElement>('speech-endpoint').value=next.endpoint;readSpeechAddress();speechStatus('语音配置已保存。','success');
     if(test){await rpc('speech:test');const deadline=Date.now()+18000;while(Date.now()<deadline){await new Promise(resolve=>setTimeout(resolve,400));const state=speechStatusOrIdle(await rpc('speech:status'));speechStatus(state.message,state.state==='error'?'error':'');if(state.state!=='connecting')return;}speechStatus('连接测试超时，请检查网络与地域。','error');}
@@ -192,6 +223,7 @@ el('speech-form').addEventListener('submit',event=>{event.preventDefault();void 
 el('speech-test').addEventListener('click',()=>void saveSpeech(true));
 el('speech-form').addEventListener('input',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
 el('speech-vad').addEventListener('change',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
+el('speech-profile').addEventListener('change',()=>{if(speechReady&&!speechBusy)speechStatus('有未保存的语音配置。','dirty');});
 function speechModelHelp(){const streaming=isStreaming(value('speech-model').trim());el<HTMLTextAreaElement>('speech-context').maxLength=streaming?400:2000;el('speech-context-help').textContent=streaming?'3.1 Streaming 最多 400 字。直播翻译会附上精简后的同一段。':'原版术语最多 2000 字。直播翻译会附上精简后的同一段。';el('speech-address-help').textContent=streaming?'3.1 需要业务空间地址。填写 Workspace ID 后自动生成，Key 须匹配地域和业务空间。':'可使用默认地址或业务空间地址，Key 须匹配地域。';}
 function readSpeechAddress(){try{const url=new URL(value('speech-endpoint')),match=url.hostname.match(/^([a-zA-Z0-9-]+)\.(cn-beijing|ap-southeast-1)\.maas\.aliyuncs\.com$/);el<HTMLInputElement>('speech-workspace').value=match?.[1]??'';el<HTMLSelectElement>('speech-region').value=match?.[2]??(url.hostname==='dashscope-intl.aliyuncs.com'?'ap-southeast-1':'cn-beijing');}catch{}}
 function buildSpeechAddress(){

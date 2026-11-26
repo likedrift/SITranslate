@@ -83,7 +83,10 @@ export class CompatibleAdapter implements ProviderAdapter {
       messages:[{role:'system',content:systemPrompt(input,language)},
       {role:'user',content:JSON.stringify({blocks:input.blocks})}]};
     if(profile.jsonMode)body.response_format={type:'json_object'};
-    if(profile.type==='deepseek' && profile.disableThinking)body.thinking={type:'disabled'};
+    if(profile.disableThinking){
+      if(profile.type==='deepseek')body.thinking={type:'disabled'};
+      else body.enable_thinking=false;
+    }
     const timeout=AbortSignal.timeout(90000);
     const headerTimeout=new AbortController();
     const headerTimer=setTimeout(()=>headerTimeout.abort(),25000);
