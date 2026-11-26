@@ -58,11 +58,11 @@ function icon(size) {
       const aBase = Math.max(0, Math.min(1, 0.5 - dBase / pxSize));
       if (aBase <= 0) continue;
 
-      // Subtle vertical cobalt depth: #2563eb (top) -> #1d4ed8 (bottom)
+      // Subtle vertical Bluestone × Classic Blue depth: #3b6ad4 (top) -> #2b5ce0 (bottom)
       const tGrad = Math.max(0, Math.min(1, v * 0.95));
-      let r = 37 + (29 - 37) * tGrad;
-      let g = 99 + (78 - 99) * tGrad;
-      let b = 235 + (216 - 235) * tGrad;
+      let r = 59 + (43 - 59) * tGrad;
+      let g = 106 + (92 - 106) * tGrad;
+      let b = 212 + (224 - 212) * tGrad;
 
       if (!small) {
         const dInnerTop = sdRoundBox(u, v - 0.012, 0.5, 0.5, pad - 0.018, pad - 0.018, radius - 0.02);
@@ -140,7 +140,7 @@ function icon(size) {
         const dWenLeg2 = sdSegment(u, v, c2Pos - 0.04, c2Pos - 0.055, c2Pos + 0.092, c2Pos + 0.105) - strokeW;
         const aWen = Math.max(0, Math.min(1, 0.5 - Math.min(dWenTop, dWenDot, dWenLeg1, dWenLeg2) / pxSize));
         if (aWen > 0 && aCard2 > 0.5) {
-          const wR = 29, wG = 78, wB = 216;
+          const wR = 43, wG = 92, wB = 224;
           r = r * (1 - aWen) + wR * aWen;
           g = g * (1 - aWen) + wG * aWen;
           b = b * (1 - aWen) + wB * aWen;

@@ -14,7 +14,7 @@
         <rect x="4" y="4" width="16" height="16" rx="4" fill="white" fill-opacity="0.32"/>
         <path d="M9 17L12 9L15 17M10 14.5H14" stroke="white" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
         <rect x="12" y="12" width="16" height="16" rx="4" fill="white"/>
-        <path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#1d4ed8" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
+        <path d="M20 14.5V17M16 17H24M22 17.8L16.5 24M19 19L23.5 24" stroke="#2b5ce0" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round"/>
       </svg>
     </span>
     <h1>思译</h1>
@@ -58,9 +58,9 @@
         <p id="speech-timing" class="status" hidden></p>
         <p id="speech-usage" class="status" hidden></p>
         <p id="speech-stream-warning" class="notice" role="status" hidden></p>
-        <div class="row">
+        <div class="fold-actions">
           <button class="secondary" id="speech-start" type="button">开始实时翻译</button>
-          <button class="text-button" id="speech-stop" type="button" disabled>停止音频</button>
+          <button class="secondary danger-soft" id="speech-stop" type="button" disabled>停止音频</button>
         </div>
       </div>
     </details>
@@ -69,9 +69,9 @@
       <summary><span>视频字幕</span><span class="fold-badge" id="video-badge" hidden></span></summary>
       <div class="fold-body">
         <p id="video-state" class="status" aria-live="polite" hidden>正在读取字幕状态…</p>
-        <div class="row">
+        <div class="fold-actions">
           <button class="secondary" id="video-start" type="button" disabled>正在读取字幕状态…</button>
-          <button class="text-button" id="video-stop" type="button" disabled>停止</button>
+          <button class="secondary danger-soft" id="video-stop" type="button" disabled>停止</button>
           <button class="text-button" id="video-retry" type="button" hidden>重试</button>
         </div>
         <label class="switch-row">

@@ -90,6 +90,7 @@ try{
     const settings=await rpc('settings:get');assert.equal(settings.profiles[0].baseUrl,origin+'/v1');
     await activate();await popup.reload();await until(async()=>await popup.locator('#video-start').textContent()==='翻译视频字幕');assert.equal(await popup.locator('#video-start').isDisabled(),false);
     await ui.screenshot({path:'artifacts/settings-light.png',fullPage:true});await popup.setViewportSize({width:360,height:640});await popup.screenshot({path:'artifacts/popup-light.png'});
+    await popup.emulateMedia({colorScheme:'dark'});await popup.locator('#video-fold > summary').click();await popup.screenshot({path:'artifacts/popup-dark.png'});await popup.locator('#video-fold > summary').click();await popup.emulateMedia({colorScheme:'light'});
     await ui.emulateMedia({colorScheme:'dark'});await ui.screenshot({path:'artifacts/settings-dark.png',fullPage:true});await ui.emulateMedia({colorScheme:'light'});
   });
   await step('Settings nav follows the visible section, switches reload from storage, and speech save stays separate',async()=>{
@@ -446,19 +447,24 @@ try{
     await toggle.click();await until(async()=>await captions.isEnabled());
     // Synthetic site clicks must not start translation. The following keyboard press is a real user gesture.
     await captions.evaluate(el=>el.click());assert.equal((await rpc('video:status')).state,'idle');
-    await captions.focus();await page.keyboard.press('Enter');await until(async()=>await captions.textContent()==='停止网站字幕翻译');
+    await captions.focus();await page.keyboard.press('Enter');await until(async()=>await captions.getAttribute('aria-checked')==='true');
     assert.equal(await page.evaluate(()=>window.playerClicks),0);
     await page.locator('.ytp-caption-segment').evaluate(el=>el.textContent='Hello world.');await until(async()=>(await captionText()).includes('你好，世界。'));
     assert.ok(await controls.locator('#panel').evaluate(el=>el.matches(':popover-open')));
+    await controls.locator('#caption-style').click();await until(async()=>await controls.locator('#caption-style-val').textContent()==='无框描边');
+    await controls.locator('#caption-style').click();await until(async()=>await controls.locator('#caption-style-val').textContent()==='深色高对比');
+    await controls.locator('#caption-style').click();await until(async()=>await controls.locator('#caption-style-val').textContent()==='轻磨砂');
+    await controls.locator('#font-inc').click();await until(async()=>await controls.locator('#font-size-val').textContent()==='24px');
+    await controls.locator('#font-dec').click();await until(async()=>await controls.locator('#font-size-val').textContent()==='22px');
     await page.screenshot({path:'artifacts/player-controls.png'});
-    await captions.click();await until(async()=>await captions.textContent()==='开始网站字幕翻译');
-    await videoAct('start');await until(async()=>await captions.textContent()==='停止网站字幕翻译');
+    await captions.click();await until(async()=>await captions.getAttribute('aria-checked')==='false');
+    await videoAct('start');await until(async()=>await captions.getAttribute('aria-checked')==='true');
     await page.keyboard.press('Escape');assert.equal(await toggle.getAttribute('aria-expanded'),'false');
     await videoAct('stop');await until(async()=>await toggle.getAttribute('data-active')==='false');
     await page.locator('.ytp-right-controls').evaluate(el=>{const next=document.createElement('div');next.className=el.className;next.append(...[...el.children].filter(c=>!c.hasAttribute('data-si-owned')));el.replaceWith(next);});
     await until(async()=>await controls.count()===1);assert.equal(await page.locator('.ytp-subtitles-button').count(),1);
     const after=requests.length;await page.reload();await until(async()=>await controls.count()===1);assert.equal(requests.length,after);
-    await toggle.click();await until(async()=>await captions.isEnabled());assert.equal(await captions.textContent(),'开始网站字幕翻译');
+    await toggle.click();await until(async()=>await captions.isEnabled());assert.equal(await captions.getAttribute('aria-checked'),'false');
     await page.locator('#fullscreen').click();await until(async()=>await page.evaluate(()=>!!document.fullscreenElement));
     assert.ok(await toggle.isVisible());await toggle.click();assert.ok(await captions.isVisible());
     await page.evaluate(()=>document.exitFullscreen());await until(async()=>await page.evaluate(()=>!document.fullscreenElement));

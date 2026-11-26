@@ -330,7 +330,7 @@ try{
     await page.goto('https://www.youtube.com/watch?v=speech-controls');await activate();
     const controls=page.locator('#si-player-controls'),toggle=controls.locator('#toggle'),button=controls.locator('#speech');
     await toggle.click();await until(async()=>await button.isEnabled());const before=mock.stats.authorized;assert.equal((await rpc('speech:status')).state,'stopped');
-    await button.click();await until(async()=> (await rpc('speech:status')).state==='active');assert.ok(mock.stats.authorized>before);assert.equal(await button.textContent(),'停止实时语音翻译');
+    await button.click();await until(async()=> (await rpc('speech:status')).state==='active');assert.ok(mock.stats.authorized>before);assert.equal(await button.getAttribute('aria-checked'),'true');
     const session=(await rpc('speech:status')).sessionId;
     // No page message may borrow the sender's permissions to act on the tabId in its payload.
     const other=await context.newPage();await other.goto('https://www.youtube.com/watch?v=other');
@@ -338,7 +338,7 @@ try{
     const response=await worker.evaluate(async({otherId,tabId})=>(await chrome.scripting.executeScript({target:{tabId:otherId},func:tabId=>chrome.runtime.sendMessage({type:'player:action',mode:'speech',action:'stop',tabId}),args:[tabId]}))[0].result,{otherId,tabId});
     assert.equal(response.ok,false);assert.match(response.error,/其他标签页/);assert.equal((await rpc('speech:status')).sessionId,session);await other.close();
     await activate();await page.reload();await until(async()=> (await rpc('speech:status')).state==='active'&&await toggle.getAttribute('data-active')==='true');
-    assert.equal((await rpc('speech:status')).sessionId,session);await toggle.click();await until(async()=>await button.textContent()==='停止实时语音翻译');
+    assert.equal((await rpc('speech:status')).sessionId,session);await toggle.click();await until(async()=>await button.getAttribute('aria-checked')==='true');
     await button.click();await until(async()=>(await rpc('speech:status')).state==='stopped');assert.equal(await page.locator('[data-si-owned=video]').count(),0);
     assert.equal((await worker.evaluate(()=>chrome.runtime.getContexts({contextTypes:['OFFSCREEN_DOCUMENT']}))).length,0);
     await rpc('speech:start');await until(async()=>await toggle.getAttribute('data-active')==='true');await rpc('speech:stop');await until(async()=>await toggle.getAttribute('data-active')==='false');

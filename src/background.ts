@@ -189,7 +189,14 @@ async function playerStatus(tabId:number):Promise<PlayerState>{
     chrome.commands.getAll(),
     captionLayout()
   ]);
-  return {speech:voice,captions:video&&typeof video.state==='string'&&typeof video.message==='string'?{state:video.state,message:video.message}:{state:'idle',message:''},shortcut:commands.find(c=>c.name==='toggle-speech')?.shortcut??'',showOriginal:layout.showOriginal};
+  return {
+    speech:voice,
+    captions:video&&typeof video.state==='string'&&typeof video.message==='string'?{state:video.state,message:video.message}:{state:'idle',message:''},
+    shortcut:commands.find(c=>c.name==='toggle-speech')?.shortcut??'',
+    showOriginal:layout.showOriginal,
+    captionStyle:layout.style??'glass',
+    fontSize:layout.fontSize
+  };
 }
 async function route(message:any,sender:chrome.runtime.MessageSender){
   await initialized;if(!message||typeof message.type!=='string')throw new Error('无效消息。');
@@ -202,6 +209,12 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
     if(message.type==='player:settings')return chrome.runtime.openOptionsPage();
     if(message.type==='player:shortcuts'){await chrome.tabs.create({url:'chrome://extensions/shortcuts'});return;}
     if(message.type==='player:bilingual'){await saveCaption({showOriginal:message.showOriginal!==false});return playerStatus(tabId);}
+    if(message.type==='player:caption'){
+      const patch:Partial<CaptionLayout>={};
+      for(const key of ['showOriginal','style','fontSize'] as const)if(key in (message.patch??{}))(patch as any)[key]=message.patch[key];
+      await saveCaption(patch);
+      return playerStatus(tabId);
+    }
     if(message.type!=='player:action'||!['speech','captions'].includes(message.mode)||!['start','stop'].includes(message.action))throw new Error('不支持的播放器操作。');
     if(message.mode==='speech')await speech.controlTab(tabId,message.action);
     else{

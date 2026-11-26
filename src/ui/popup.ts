@@ -48,14 +48,15 @@ function paint(s:PageStatus){
   el('retry').hidden=!s.failed;el<HTMLButtonElement>('translate').disabled=busy||['scanning','translating'].includes(s.state);
 }
 async function refresh(){try{paint(await rpc<PageStatus>('tab:status'));}catch(err){error(err instanceof Error?err.message:'无法访问当前页面。');}}
+function trimDot(text:string){return text.replace(/[。.]+\s*$/,'').trim();}
 function paintVideo(s:VideoStatus){
   if(!isVideoStatus(s))s={...EMPTY_VIDEO_STATUS};
-  const message=s.message===IDLE_VIDEO_COPY?'':s.message;
+  const message=s.message===IDLE_VIDEO_COPY?'':trimDot(s.message);
   const idle=s.state==='idle';
-  el('video-state').textContent=[s.source,message,s.completed?`已翻译 ${s.completed} 条字幕`:''].filter(Boolean).join(' · ')||(idle?'未开始':'');
+  el('video-state').textContent=[s.source,message,s.completed?`已译 ${s.completed} 条字幕`:''].filter(Boolean).join(' · ')||(idle?'未开始':'');
   el('video-state').hidden=idle;
   setBadge('video-badge',s.state==='active'?'运行中':s.state==='loading'?'读取中':'',s.state==='active'||s.state==='loading');
-  if(!idle&&s.state!=='loading')openFold('video-fold');
+  if(!idle&&s.state!=='loading'&&s.source!=='标签页音频')openFold('video-fold');
   el<HTMLButtonElement>('video-stop').disabled=!['loading','active'].includes(s.state);
   el('video-retry').hidden=s.state!=='active'||s.source==='标签页音频';
   el<HTMLButtonElement>('video-start').disabled=s.state==='loading';
@@ -116,7 +117,7 @@ chrome.storage.onChanged.addListener((changes,area)=>{if(area==='session'&&Objec
 chrome.permissions.onAdded.addListener(()=>void refreshSelection());
 chrome.permissions.onRemoved.addListener(()=>void refreshSelection());
 void init().catch(err=>error(err.message));
-async function refreshSpeech(){try{const s=speechStatusOrIdle(await rpc<SpeechStatus>('speech:status'));const base=s.state==='idle'?'未开始':s.message;const restart=/开始实时翻译/.test(s.message)&&['stopped','error'].includes(s.state);el('speech-state').hidden=s.state==='idle';el('speech-state').textContent=restart?s.message:base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${s.seconds%60}秒 · 已译 ${s.completed} 段`:'');el('speech-state').className=restart?'status attention':'status';setBadge('speech-badge',s.state==='active'?'运行中':s.state==='connecting'?'连接中':'',s.state==='active'||s.state==='connecting');if(s.state!=='idle')openFold('speech-fold');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
+async function refreshSpeech(){try{const s=speechStatusOrIdle(await rpc<SpeechStatus>('speech:status'));const base=s.state==='idle'?'未开始':trimDot(s.message);const restart=/开始实时翻译/.test(s.message)&&['stopped','error'].includes(s.state);el('speech-state').hidden=s.state==='idle';el('speech-state').textContent=restart?s.message:base+(s.seconds?` · ${Math.floor(s.seconds/60)}分${String(s.seconds%60).padStart(2,'0')}秒 · 已译 ${s.completed} 段`:'');el('speech-state').className=restart?'status attention':'status';setBadge('speech-badge',s.state==='active'?'运行中':s.state==='connecting'?'连接中':'',s.state==='active'||s.state==='connecting');if(s.state!=='idle')openFold('speech-fold');el<HTMLButtonElement>('speech-stop').disabled=!['active','connecting'].includes(s.state);el<HTMLButtonElement>('speech-start').disabled=s.state==='connecting';el('speech-start').textContent=s.state==='active'?'重新开始':'开始实时翻译';el('speech-usage').hidden=!s.asrUsage;if(s.asrUsage)el('speech-usage').textContent=`已收到语音用量：输入 ${s.asrUsage.inputTokens.toLocaleString()} / 输出 ${s.asrUsage.outputTokens.toLocaleString()} Token（非最终账单）`;el('speech-timing').hidden=!s.timing;if(s.timing)el('speech-timing').textContent=`最近一段：排队 ${s.timing.queueMs}ms · 翻译 ${s.timing.translationMs}ms（从识别文本确认后计时）`;}catch{}}
 el('speech-start').addEventListener('click',async()=>{el<HTMLButtonElement>('speech-start').disabled=true;try{await preferences();settings=await rpc<Settings>('settings:get');paintStreamWarning();await rpc('speech:start');await refreshSpeech();}catch(e){error(e instanceof Error?e.message:'无法开启实时翻译。');}finally{el<HTMLButtonElement>('speech-start').disabled=false;}});
 el('speech-stop').addEventListener('click',()=>void rpc('speech:stop').then(refreshSpeech).catch(e=>error(e.message)));
 el('speech-settings').addEventListener('click',event=>{event.preventDefault();event.stopPropagation();void chrome.tabs.create({url:chrome.runtime.getURL('options.html#speech')});});
