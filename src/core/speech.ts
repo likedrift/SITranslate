@@ -1,5 +1,7 @@
 export type VadSilenceMs=400|600|800;
-export interface SpeechSettings {endpoint:string;apiKey:string;model:string;language:'ja'|'en'|'zh'|'auto';context:string;silenceDurationMs:VadSilenceMs;profileId?:string}
+export const SPEECH_LANGUAGES=['ja','en','ko','zh','fr','de','es','ru','auto'] as const;
+export type SpeechLanguage=(typeof SPEECH_LANGUAGES)[number];
+export interface SpeechSettings {endpoint:string;apiKey:string;model:string;language:SpeechLanguage;context:string;silenceDurationMs:VadSilenceMs;profileId?:string}
 export interface SpeechUsage {inputTokens:number;outputTokens:number;totalTokens:number}
 export interface SpeechStatus {state:'idle'|'connecting'|'active'|'stopped'|'error';sessionId:string;recognitionId?:string;pageUrl?:string;resumePending?:boolean;needsActivation?:boolean;tabId:number;message:string;seconds:number;sentBytes:number;hasAudio:boolean;completed:number;lastSource:string;lastTranslation:string;asrUsage?:SpeechUsage;sourceTime?:{beginMs:number;endMs?:number};timing?:{queueMs:number;translationMs:number;textToCaptionMs:number}}
 export const STREAMING_MODEL='qwen-audio-3.1-asr-flash-streaming';
@@ -33,7 +35,7 @@ export function speechEndpoint(value:string){
 export function speechUrl(endpoint:string,model:string){const u=new URL(speechEndpoint(endpoint));u.pathname=isStreaming(model)?'/api-ws/v1/inference':'/api-ws/v1/realtime';if(!isStreaming(model))u.searchParams.set('model',model);return u.href;}
 export function normalizeSpeech(s:SpeechSettings):SpeechSettings{if(!s||typeof s.endpoint!=='string')throw new Error('语音识别配置无效。');const url=new URL(speechUrl(s.endpoint,s.model));url.search='';const rawProfile=(s as {profileId?:unknown}).profileId;const profileId=typeof rawProfile==='string'?rawProfile.trim():'';const next:SpeechSettings={...s,endpoint:url.href,silenceDurationMs:storedVadSilence((s as {silenceDurationMs?:unknown}).silenceDurationMs),...(profileId?{profileId}:{})};if(!profileId)delete next.profileId;validateSpeech(next);return next;}
 export function validateSpeech(s:SpeechSettings){
-  if(!s||typeof s.endpoint!=='string'||s.endpoint.length>512||typeof s.apiKey!=='string'||s.apiKey.length>512||/[\r\n]/.test(s.apiKey)||(!isStreaming(s.model)&&!/^qwen3-asr-flash-realtime(?:-\d{4}-\d{2}-\d{2})?$/.test(s.model))||!['ja','en','zh','auto'].includes(s.language)||typeof s.context!=='string'||s.context.length>2000||!isVadSilenceMs(s.silenceDurationMs)||(s.profileId!==undefined&&(typeof s.profileId!=='string'||s.profileId.length>80)))throw new Error('语音识别配置无效。');const url=new URL(speechEndpoint(s.endpoint));
+  if(!s||typeof s.endpoint!=='string'||s.endpoint.length>512||typeof s.apiKey!=='string'||s.apiKey.length>512||/[\r\n]/.test(s.apiKey)||(!isStreaming(s.model)&&!/^qwen3-asr-flash-realtime(?:-\d{4}-\d{2}-\d{2})?$/.test(s.model))||!(SPEECH_LANGUAGES as readonly string[]).includes(s.language)||typeof s.context!=='string'||s.context.length>2000||!isVadSilenceMs(s.silenceDurationMs)||(s.profileId!==undefined&&(typeof s.profileId!=='string'||s.profileId.length>80)))throw new Error('语音识别配置无效。');const url=new URL(speechEndpoint(s.endpoint));
   if(url.pathname!==(isStreaming(s.model)?'/api-ws/v1/inference':'/api-ws/v1/realtime'))throw new Error('语音服务地址与识别模型不匹配。');
   if(isStreaming(s.model)){
     if(['dashscope.aliyuncs.com','dashscope-intl.aliyuncs.com'].includes(url.hostname))throw new Error('3.1 Streaming 需要业务空间专属地址。请填写对应地域的 Workspace ID，或粘贴完整业务空间地址。');
@@ -46,3 +48,11 @@ export function speechAuthRule(endpoint:string,model:string,key:string,extension
   return {id:891,priority:1,condition:{urlFilter:`|${url.href}|`,isUrlFilterCaseSensitive:true,initiatorDomains:[extensionId],resourceTypes:['websocket' as chrome.declarativeNetRequest.ResourceType]},action:{type:'modifyHeaders' as chrome.declarativeNetRequest.RuleActionType,requestHeaders:[{header:'Authorization',operation:'set' as chrome.declarativeNetRequest.HeaderOperation,value:`Bearer ${key}`}]}};
 }
 export function pcm16(samples:Float32Array){const bytes=new Uint8Array(samples.length*2),view=new DataView(bytes.buffer);for(let i=0;i<samples.length;i++){const x=Math.max(-1,Math.min(1,samples[i]));view.setInt16(i*2,Math.round(x*(x<0?32768:32767)),true);}return bytes;}
+/** Chunked binary-to-base64 conversion to avoid per-byte string allocations during long live streams. */
+export function pcmBase64(pcm:Uint8Array):string{
+  const CHUNK=8192;
+  if(pcm.length<=CHUNK)return btoa(String.fromCharCode(...pcm));
+  let binary='';
+  for(let i=0;i<pcm.length;i+=CHUNK)binary+=String.fromCharCode(...pcm.subarray(i,i+CHUNK));
+  return btoa(binary);
+}

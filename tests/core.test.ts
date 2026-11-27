@@ -1,12 +1,13 @@
 import {test} from 'node:test';
 import assert from 'node:assert/strict';
 import {endpointFor,validateSettings,validateInput,parseSegments} from '../src/core/validation.ts';
-import {DEFAULT_SETTINGS,EMPTY_STATUS,EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,isPageStatus,isVideoStatus,pageStatusOrIdle,videoStatusOrEmpty,type TranslationInput} from '../src/core/types.ts';
+import {DEFAULT_SETTINGS,EMPTY_STATUS,EMPTY_VIDEO_STATUS,NO_VIDEO_CAPTION_MESSAGE,isPageStatus,isVideoStatus,migrateDefaultProfile,pageStatusOrIdle,videoStatusOrEmpty,type TranslationInput} from '../src/core/types.ts';
 import {Scheduler} from '../src/core/scheduler.ts';
 import {TranslationCache,cacheKey} from '../src/core/cache.ts';
 import {CompatibleAdapter,ProviderError,RateLimitError,readSSE,retryDelayMs} from '../src/core/provider.ts';
 import {isRateLimitPayload,RATE_LIMIT_BACKOFF_MS,rateLimitBackoffMs,RETRYABLE_BACKOFF_MS} from '../src/core/rate-limit.ts';
-import {SharedWork} from '../src/core/shared.ts';
+import {SharedWork,pruneTabState} from '../src/core/shared.ts';
+import {buildManifest,EDITION,isProEdition} from '../src/core/edition.ts';
 import {estimateOutputTokens} from '../src/core/text.ts';
 import {cueIndex,activeSubtitle,subtitleText} from '../src/core/subtitles.ts';
 const input:TranslationInput={kind:'page',profileId:'deepseek-default',taskId:'task',requestId:'request',target:'zh-Hans',blocks:[{id:'b1',context:'Read documentation carefully.',segments:[{id:'s1',text:'Read '},{id:'s2',text:'documentation'},{id:'s3',text:' carefully.'}]}]};
@@ -279,4 +280,44 @@ test('empty or invalid status replies become idle and valid replies stay unchang
 test('SSE retains length termination even when usage arrives in a separate frame',async()=>{
   const wire='data: {"choices":[{"delta":{"content":"partial"},"finish_reason":"length"}]}\n\ndata: {"choices":[],"usage":{"prompt_tokens":5}}\n\ndata: [DONE]\n\n';
   const result=await readSSE(new Response(wire),new AbortController().signal);assert.equal(result.finishReason,'length');assert.equal(result.usage.prompt_tokens,5);
+});
+test('default DeepSeek profile uses valid deepseek-chat model and upgrades untouched legacy placeholder',()=>{
+  assert.equal(DEFAULT_SETTINGS.profiles[0].model,'deepseek-chat');
+  const legacy=structuredClone(DEFAULT_SETTINGS);
+  legacy.profiles[0].model='deepseek-flash';
+  assert.equal(migrateDefaultProfile(legacy),true);
+  assert.equal(legacy.profiles[0].model,'deepseek-chat');
+  assert.equal(migrateDefaultProfile(legacy),false);
+  const configured=structuredClone(DEFAULT_SETTINGS);
+  configured.profiles[0].model='deepseek-flash';
+  configured.profiles[0].apiKey='sk-user-configured';
+  assert.equal(migrateDefaultProfile(configured),false);
+  assert.equal(configured.profiles[0].model,'deepseek-flash');
+});
+test('tab cleanup prunes videoTabs, budgets, cancelled tokens and aborts only that tab jobs',()=>{
+  const videoTabs=new Set([7,9]);
+  const taskBudget=new Map<string,unknown>([['7:0:t1',{chars:10,limit:100}],['9:0:t2',{chars:5,limit:100}]]);
+  const cancelledTasks=new Set(['7:0:old','9:0:keep']);
+  const c7=new AbortController(),c9=new AbortController();
+  const jobs=new Map([['7:0:r1',{tabId:7,controller:c7}],['9:0:r2',{tabId:9,controller:c9}]]);
+  const res=pruneTabState(7,{videoTabs,taskBudget,cancelledTasks,jobs});
+  assert.equal(res.budgetsChanged,true);
+  assert.deepEqual([...videoTabs],[9]);
+  assert.deepEqual([...taskBudget.keys()],['9:0:t2']);
+  assert.deepEqual([...cancelledTasks],['9:0:keep']);
+  assert.equal(c7.signal.aborted,true);
+  assert.equal(c9.signal.aborted,false);
+  assert.deepEqual([...jobs.keys()],['9:0:r2']);
+  assert.equal(pruneTabState(7,{videoTabs,taskBudget,cancelledTasks,jobs}).budgetsChanged,false);
+});
+test('manifest builder strips loopback WebSocket hosts in prod and tags Pro edition cleanly',()=>{
+  assert.equal(EDITION,'oss');
+  assert.equal(isProEdition(),false);
+  const raw={name:'Si Translate · 思译',host_permissions:['https://*/*','wss://dashscope.aliyuncs.com/*','ws://127.0.0.1/*','ws://localhost/*']};
+  const prod=buildManifest(raw,{mode:'prod',edition:'oss'});
+  assert.deepEqual(prod.host_permissions,['https://*/*','wss://dashscope.aliyuncs.com/*']);
+  assert.equal(prod.name,'Si Translate · 思译');
+  const dev=buildManifest(prod,{mode:'dev',edition:'pro'});
+  assert.ok(dev.host_permissions.includes('ws://127.0.0.1/*'));
+  assert.equal(dev.name,'Si Translate · 思译 Pro');
 });

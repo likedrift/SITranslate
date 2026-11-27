@@ -3,22 +3,44 @@ import { mkdir, writeFile, readFile, readdir, stat } from 'node:fs/promises';
 import { deflateSync, gzipSync } from 'node:zlib';
 import path from 'node:path';
 
-await build({ configFile: false, build: { outDir: 'dist', rollupOptions: {
+const args = process.argv.slice(2);
+const modeArg = args.find(a => a.startsWith('--mode='))?.split('=')[1];
+const editionArg = args.find(a => a.startsWith('--edition='))?.split('=')[1];
+const buildMode = modeArg === 'dev' ? 'dev' : 'prod';
+const edition = editionArg === 'pro' ? 'pro' : 'oss';
+const define = {
+  __SI_EDITION__: JSON.stringify(edition),
+  __SI_BUILD_MODE__: JSON.stringify(buildMode)
+};
+const DEV_LOOPBACK_WS = ['ws://127.0.0.1/*', 'ws://localhost/*', 'ws://[::1]/*'];
+
+await build({ configFile: false, define, build: { outDir: 'dist', rollupOptions: {
   input: { popup: 'popup.html', options: 'options.html', offscreen:'offscreen.html', background: 'src/background.ts' },
   output: { entryFileNames: '[name].js', chunkFileNames: 'assets/[name]-[hash].js' }
 } } });
-await build({ configFile: false, publicDir: false, build: { outDir: 'dist', emptyOutDir: false,
+await build({ configFile: false, define, publicDir: false, build: { outDir: 'dist', emptyOutDir: false,
   lib: { entry: 'src/content.ts', name: 'SiTranslate', formats: ['iife'], fileName: () => 'content.js' },
   rollupOptions: { output: { inlineDynamicImports: true } }
 } });
 
-await build({ configFile:false,publicDir:false,build:{outDir:'dist',emptyOutDir:false,
+await build({ configFile:false, define, publicDir:false, build:{outDir:'dist',emptyOutDir:false,
   lib:{entry:'src/video.ts',name:'SiVideoTranslate',formats:['iife'],fileName:()=> 'video.js'},
   rollupOptions:{output:{inlineDynamicImports:true}}} });
 
-await build({configFile:false,publicDir:false,build:{outDir:'dist',emptyOutDir:false,
+await build({configFile:false, define, publicDir:false, build:{outDir:'dist',emptyOutDir:false,
   lib:{entry:'src/player-controls.ts',name:'SiPlayerControls',formats:['iife'],fileName:()=> 'player-controls.js'},
   rollupOptions:{output:{inlineDynamicImports:true}}}});
+
+const rawManifest = JSON.parse(await readFile('dist/manifest.json', 'utf8'));
+if (Array.isArray(rawManifest.host_permissions)) {
+  rawManifest.host_permissions = buildMode === 'prod'
+    ? rawManifest.host_permissions.filter(p => !DEV_LOOPBACK_WS.includes(p))
+    : [...new Set([...rawManifest.host_permissions, ...DEV_LOOPBACK_WS])];
+}
+if (edition === 'pro' && typeof rawManifest.name === 'string' && !rawManifest.name.includes('Pro')) {
+  rawManifest.name = `${rawManifest.name} Pro`;
+}
+await writeFile('dist/manifest.json', JSON.stringify(rawManifest, null, 2) + '\n');
 
 // Antialiased brand icons with modern dual-card translation glyph, generated locally without external image dependencies.
 function crc32(bytes) { let crc = -1; for (const b of bytes) { crc ^= b; for (let k=0;k<8;k++) crc = (crc>>>1) ^ (0xedb88320 & -(crc&1)); } return (crc^-1)>>>0; }
@@ -178,5 +200,5 @@ const rows=[];
 async function inspect(dir) { for(const name of await readdir(dir)) { const file=path.join(dir,name); if((await stat(file)).isDirectory()) await inspect(file); else { const data=await readFile(file); rows.push({file:file.replaceAll('\\','/'),bytes:data.length,gzip:gzipSync(data).length}); } } }
 await inspect('dist');
 await mkdir('artifacts',{recursive:true});
-await writeFile('artifacts/build-sizes.json',JSON.stringify(rows,null,2));
-console.log('Build complete. Load the dist folder in Chrome.');
+await writeFile('artifacts/build-sizes.json',JSON.stringify({mode:buildMode,edition,files:rows},null,2));
+console.log(`Build complete (${edition}, ${buildMode}). Load the dist folder in Chrome.`);

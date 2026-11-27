@@ -41,11 +41,23 @@ export const NO_VIDEO_CAPTION_MESSAGE='这个视频没有可读取的字幕。�
 export const DEFAULT_SETTINGS: Settings = {
   version: 1,
   profiles: [{ id: 'deepseek-default', name: 'DeepSeek', type: 'deepseek',
-    baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-flash',
+    baseUrl: 'https://api.deepseek.com', apiKey: '', model: 'deepseek-chat',
     jsonMode: false, stream: true, disableThinking: true, inputPrice: 0, outputPrice: 0 }],
   activeProfileId: 'deepseek-default', target: 'zh-Hans', display: 'replace',
   includeContext: false, maxPageChars: 100000, dynamic: true, cacheEnabled: true
 };
+
+/** Upgrades untouched legacy unconfigured default model placeholder (`deepseek-flash` -> `deepseek-chat`). */
+export function migrateDefaultProfile(settings: Settings): boolean {
+  let changed = false;
+  for (const p of settings.profiles) {
+    if (p.id === 'deepseek-default' && !p.apiKey.trim() && p.model === 'deepseek-flash' && p.baseUrl === 'https://api.deepseek.com') {
+      p.model = 'deepseek-chat';
+      changed = true;
+    }
+  }
+  return changed;
+}
 export const EMPTY_STATUS: PageStatus = {state: 'idle', total: 0, completed: 0,
   failed: 0, chars: 0, limited: false, message: '', display: 'replace'};
 export const EMPTY_VIDEO_STATUS:VideoStatus={state:'idle',source:'',completed:0,message:'有字幕的视频可开启翻译。',bilingual:true};

@@ -23,7 +23,7 @@ const server=http.createServer(async(req,res)=>{
 const mock=mockASR(server);await new Promise(resolve=>server.listen(0,'127.0.0.1',resolve));const origin=`http://127.0.0.1:${server.address().port}`,ws=origin.replace('http:','ws:')+'/api-ws/v1/realtime';
 await mkdir('artifacts',{recursive:true});const extension=path.resolve('artifacts/speech-extension');await cp('dist',extension,{recursive:true});
 const {publicKey}=generateKeyPairSync('rsa',{modulusLength:2048}),der=publicKey.export({type:'spki',format:'der'}),id=createHash('sha256').update(der).digest('hex').slice(0,32).replace(/[0-9a-f]/g,c=>String.fromCharCode(97+parseInt(c,16)));
-const manifest=JSON.parse(await readFile(path.join(extension,'manifest.json'),'utf8'));manifest.key=der.toString('base64');await writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
+const manifest=JSON.parse(await readFile(path.join(extension,'manifest.json'),'utf8'));manifest.key=der.toString('base64');if(!manifest.host_permissions.includes('ws://127.0.0.1/*'))manifest.host_permissions.push('ws://127.0.0.1/*');await writeFile(path.join(extension,'manifest.json'),JSON.stringify(manifest));
 // Chromium allowlist supplies the toolbar invocation grant in this isolated automated profile only.
 // Mute this isolated browser, including the offscreen playback monitor. Never unmute for a test.
 const context=await chromium.launchPersistentContext(path.resolve('artifacts',`speech-profile-${Date.now()}`),{channel:'chromium',headless:true,args:['--mute-audio',`--disable-extensions-except=${extension}`,`--load-extension=${extension}`,`--allowlisted-extension-id=${id}`,'--autoplay-policy=no-user-gesture-required']});

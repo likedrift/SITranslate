@@ -1,5 +1,5 @@
 import {test} from 'node:test';import assert from 'node:assert/strict';
-import {DEFAULT_SPEECH,DEFAULT_VAD_SILENCE_MS,IDLE_SPEECH,validateSpeech,normalizeSpeech,speechEndpoint,speechAuthRule,asrSession,pcm16,isSpeechStatus,speechStatusOrIdle,type SpeechSettings} from '../src/core/speech.ts';
+import {DEFAULT_SPEECH,DEFAULT_VAD_SILENCE_MS,IDLE_SPEECH,SPEECH_LANGUAGES,validateSpeech,normalizeSpeech,speechEndpoint,speechAuthRule,asrSession,pcm16,pcmBase64,isSpeechStatus,speechStatusOrIdle,type SpeechSettings} from '../src/core/speech.ts';
 import {PAUSE_SCROLL_NOTE,PAUSE_SCROLL_POPUP_NOTE,STREAM_OFF_WARNING,liveInterruptHint} from '../src/core/live-hints.ts';
 test('speech settings default to Japanese and reject arbitrary or credential-bearing remote endpoints',()=>{validateSpeech(DEFAULT_SPEECH);assert.equal(DEFAULT_SPEECH.language,'ja');assert.equal(normalizeSpeech({...DEFAULT_SPEECH,profileId:'  fast-model  '}).profileId,'fast-model');assert.equal(normalizeSpeech({...DEFAULT_SPEECH,profileId:'   '}).profileId,undefined);assert.throws(()=>validateSpeech({...DEFAULT_SPEECH,profileId:'x'.repeat(81)}));for(const endpoint of ['wss://evil.example/api-ws/v1/realtime','wss://dashscope.aliyuncs.com.evil.example/api-ws/v1/realtime','wss://user:pass@dashscope.aliyuncs.com/api-ws/v1/realtime','wss://dashscope.aliyuncs.com/api-ws/v1/realtime?api_key=secret'])assert.throws(()=>speechEndpoint(endpoint));assert.throws(()=>validateSpeech({...DEFAULT_SPEECH,apiKey:'a\r\nb'}));});
 test('speech authentication applies only to the exact websocket URL and this extension initiator',()=>{const rule=speechAuthRule(DEFAULT_SPEECH.endpoint,DEFAULT_SPEECH.model,'placeholder','extension-id');assert.deepEqual(rule.condition.initiatorDomains,['extension-id']);assert.deepEqual(rule.condition.resourceTypes,['websocket']);assert.ok(rule.condition.urlFilter?.endsWith('|'));assert.ok(!rule.condition.urlFilter?.includes('placeholder'));});
@@ -36,5 +36,22 @@ test('empty speech replies become idle and a live session is copied unchanged',(
   for(const empty of [undefined,null,false,true,0,'',{},{state:'active'},{...active,message:1},{...active,seconds:-1}]){
     const status=speechStatusOrIdle(empty);
     assert.equal(status.state,'idle');assert.equal(status.message,IDLE_SPEECH.message);assert.equal(status.tabId,-1);assert.equal(status.completed,0);
+  }
+});
+test('expanded ASR languages validate cleanly and chunked pcmBase64 matches binary across boundaries',()=>{
+  for(const lang of SPEECH_LANGUAGES){
+    const normalized=normalizeSpeech({...DEFAULT_SPEECH,language:lang});
+    assert.equal(normalized.language,lang);
+    const session=asrSession(normalized).session.input_audio_transcription;
+    if(lang==='auto')assert.ok(!('language' in session));
+    else assert.equal(session.language,lang);
+  }
+  assert.throws(()=>validateSpeech({...DEFAULT_SPEECH,language:'tlh' as SpeechSettings['language']}),/语音识别配置无效/);
+  for(const size of [2,3200,8192,20000]){
+    const bytes=new Uint8Array(size);
+    for(let i=0;i<size;i++)bytes[i]=(i*73+19)&0xff;
+    const encoded=pcmBase64(bytes);
+    const decoded=Uint8Array.from(atob(encoded),c=>c.charCodeAt(0));
+    assert.deepEqual(decoded,bytes);
   }
 });

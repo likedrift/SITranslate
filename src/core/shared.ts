@@ -21,3 +21,34 @@ export class SharedWork<T>{
     });
   }
 }
+
+/** Reclaims per-tab tracking maps and aborts orphaned requests when a tab closes. */
+export function pruneTabState(
+  tabId: number,
+  state: {
+    videoTabs: Set<number>;
+    taskBudget: Map<string, unknown>;
+    cancelledTasks: Set<string>;
+    jobs: Map<string, { tabId: number; controller: AbortController }>;
+  }
+): { budgetsChanged: boolean } {
+  state.videoTabs.delete(tabId);
+  const prefix = `${tabId}:`;
+  for (const [key, job] of state.jobs) {
+    if (job.tabId === tabId) {
+      job.controller.abort();
+      state.jobs.delete(key);
+    }
+  }
+  for (const token of state.cancelledTasks) {
+    if (token.startsWith(prefix)) state.cancelledTasks.delete(token);
+  }
+  let budgetsChanged = false;
+  for (const key of state.taskBudget.keys()) {
+    if (key.startsWith(prefix)) {
+      state.taskBudget.delete(key);
+      budgetsChanged = true;
+    }
+  }
+  return { budgetsChanged };
+}

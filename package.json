@@ -5,6 +5,8 @@
   "type": "module",
   "scripts": {
     "build": "node scripts/build.mjs",
+    "build:dev": "node scripts/build.mjs --mode=dev",
+    "build:pro": "node scripts/build.mjs --edition=pro",
     "check": "tsc --noEmit",
     "test": "node --import tsx --test tests/*.test.ts",
     "test:browser": "node tests/browser.mjs",

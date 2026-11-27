@@ -1,4 +1,4 @@
-import {asrSession,isStreaming,speechUrl,vadSilenceMs,type SpeechSettings,type SpeechUsage} from './speech';
+import {asrSession,isStreaming,pcmBase64,speechUrl,vadSilenceMs,type SpeechSettings,type SpeechUsage} from './speech';
 export type SpeechEvent={kind:'ready'|'failed'|'warning'|'finished'}|{kind:'usage';usage:SpeechUsage}|{kind:'transcript';itemId:string;text:string;preview:string;final:boolean;beginMs?:number;endMs?:number;audioEndMs?:number};
 export interface SpeechProtocol {url:string;start:unknown;finish:unknown;audio:(pcm:Uint8Array)=>Uint8Array|Record<string,unknown>;parse:(data:any)=>SpeechEvent[]}
 const nonnegative=(n:unknown):n is number=>typeof n==='number'&&Number.isSafeInteger(n)&&n>=0&&n<=1e12;
@@ -8,9 +8,7 @@ export function speechProtocol(s:SpeechSettings,taskId=crypto.randomUUID()):Spee
     // qwen3-asr-flash-realtime puts the utterance end on speech_stopped, before the transcript events.
     const audioEnds=new Map<string,number>();
     const remember=(itemId:string,ms:unknown)=>{if(!itemId||!nonnegative(ms))return;audioEnds.set(itemId,ms);while(audioEnds.size>32)audioEnds.delete(audioEnds.keys().next().value!);};
-    return {url:speechUrl(s.endpoint,s.model),start:asrSession(s),finish:{type:'session.finish',event_id:crypto.randomUUID()},audio:pcm=>{
-      let binary='';for(const v of pcm)binary+=String.fromCharCode(v);return {type:'input_audio_buffer.append',event_id:crypto.randomUUID(),audio:btoa(binary)};
-    },parse:data=>{
+    return {url:speechUrl(s.endpoint,s.model),start:asrSession(s),finish:{type:'session.finish',event_id:crypto.randomUUID()},audio:pcm=>({type:'input_audio_buffer.append',event_id:crypto.randomUUID(),audio:pcmBase64(pcm)}),parse:data=>{
       if(data?.type==='input_audio_buffer.speech_stopped'){remember(String(data.item_id??'').slice(0,100),data.audio_end_ms);return [];}
       if(data?.type==='session.updated')return [{kind:'ready'}];if(data?.type==='error')return [{kind:'failed'}];if(data?.type==='session.finished')return [{kind:'finished'}];if(data?.type==='conversation.item.input_audio_transcription.failed')return [{kind:'warning'}];
       const final=data?.type==='conversation.item.input_audio_transcription.completed';if(!final&&data?.type!=='conversation.item.input_audio_transcription.text')return [];

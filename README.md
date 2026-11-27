@@ -8,14 +8,14 @@
 
 1. 在 Chrome 地址栏输入 `chrome://extensions`。
 2. 打开右上角的「开发者模式」。
-3. 点击「加载已解压的扩展程序」，选择 `D:\haru_ws\si_translate\dist`。
-4. 在工具栏固定「思译」，点击扩展，再点击设置按钮。
-5. 默认提供 DeepSeek 配置。填写自己的 API Key 和服务商支持的模型名称；API 服务地址默认是 `https://api.deepseek.com`。
+3. 点击「加载已解压的扩展程序」，选择本项目下的 `dist` 目录（即直接包含 `manifest.json` 的构建产物文件夹）。
+4. 在工具栏固定「思译」，点击扩展，再点击右上角设置按钮。
+5. 默认提供 DeepSeek 配置。填写自己的 API Key（默认模型名称为 `deepseek-chat`，API 服务地址为 `https://api.deepseek.com`，也可点击顶部快捷预设一键填充阿里云百炼、OpenAI、OpenRouter 或本地 Ollama）。
 6. 点击「保存设置」。可使用「保存并测试连接」发送一小段测试文字，测试会使用自己的模型额度。
 
-也可解压 `si-translate-v0.7.0.zip` 后加载解压的文件夹；选择的文件夹中应直接包含 `manifest.json`。不要直接选择 ZIP。更新已有扩展时，将新版文件覆盖到原来的扩展目录，在 `chrome://extensions` 点击思译卡片上的重新加载，再刷新网页；API Key 和模型设置保留。若 Chrome 提示访问权限变化，需要允许后才能在所有网站自动显示划词按钮。
+升级已有扩展时，重新执行 `pnpm run build`（或将新版解压文件覆盖到原目录），在 `chrome://extensions` 点击思译卡片上的重新加载，再刷新网页；API Key 和模型设置保留。
 
-DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与成本。模型名称、可用性和参数以[服务商当前文档](https://api-docs.deepseek.com/)为准。如果使用自定义兼容接口，填写基础地址（例如 `https://your-provider.example/v1`）、API Key 和模型名称。JSON 输出模式仅在服务商支持时开启；不支持流式接口时可关闭流式响应。
+DeepSeek 默认模型预设为 `deepseek-chat`，默认关闭推理（`thinking: disabled`）以优先速度与成本。模型名称、可用性和参数以[服务商当前文档](https://api-docs.deepseek.com/)为准。如果使用自定义兼容接口，填写基础地址（例如 `https://your-provider.example/v1`）、API Key 和模型名称。JSON 输出模式仅在服务商支持时开启；不支持流式接口时可关闭流式响应。
 
 ## 日常使用
 
@@ -57,7 +57,7 @@ DeepSeek 默认模型预设为 `deepseek-flash`，关闭推理以优先速度与
 
 回到 YouTube 直播页，播放视频并取消播放器静音，从 Chrome 工具栏打开思译，点击 **「开始实时翻译」**。工具栏出现「音」标记，字幕显示在视频上方；关闭插件小窗口后仍继续运行。原声以设备采样率播放，识别分支使用 16 kHz 单声道 PCM。
 
-也可直接点击 **YouTube 进度条下方、字幕和设置旁的「翻译」**：菜单内可开始 / 停止「实时语音翻译」或「网站字幕翻译」，状态与工具栏弹窗同步。网站字幕路线需先开启 YouTube 自带字幕。实时语音若尚未获得当前标签页的音频采集授权，菜单会提示按 **Alt+Shift+Y** 启动；获得授权后可直接在播放器内开关，无需反复打开插件。该快捷键也能停止实时语音；原有 Alt+Shift+T 网页翻译快捷键不变。快捷键被占用或自行修改时，以菜单显示为准，可进入 `chrome://extensions/shortcuts` 配置。Chrome 的授权可能随页面导航失效，不保证跨站永久有效。
+也可直接点击 **YouTube 进度条下方、字幕和设置旁的「思译」图标**：弹出菜单内可通过无框开关直接启停「实时语音翻译」或「网站字幕翻译」，并直接切换「同时显示原文」、「字幕风格」（轻磨砂 / 无框描边 / 深色高对比）与「字体大小」，状态与工具栏弹窗实时同步。网站字幕路线需先开启 YouTube 自带字幕。实时语音若尚未获得当前标签页的音频采集授权，菜单会提示按 **Alt+Shift+Y** 启动；获得授权后可直接在播放器内开关，无需反复打开插件。该快捷键也能停止实时语音；原有 Alt+Shift+T 网页翻译快捷键不变。快捷键被占用或自行修改时，以菜单显示为准，可进入 `chrome://extensions/shortcuts` 配置。Chrome 的授权可能随页面导航失效，不保证跨站永久有效。
 
 此入口仅适配 YouTube 网页播放器控制栏，独立于划词翻译开关；加载页面、出现按钮或打开菜单均不会开始采集或发送翻译请求。支持控制栏动态重建和网页播放器全屏。升级扩展后需重新加载扩展并刷新 YouTube 才能出现按钮。实现和 ViiTor 的对照分析见 [播放器入口说明](docs/player-controls.md)。
 
@@ -183,4 +183,4 @@ pnpm run test:browser
 
 语音自动验证全程无声：隔离浏览器强制静音，真实采集只发送静音帧；非零信号的重采样、混音和分帧使用不连接扬声器的 OfflineAudioContext，PCM16 编码另由核心测试验证。不生成蜂鸣声，不调整系统或日常浏览器的音量。不得为补充验证解除测试浏览器静音。
 
-源文件结构及后续字幕扩展方式见 [DESIGN.md](DESIGN.md)。验证结果与实际使用边界见 [VERIFICATION.md](VERIFICATION.md)。
+源文件结构及后续字幕扩展方式见 [DESIGN.md](DESIGN.md)。验证结果与实际使用边界见 [VERIFICATION.md](VERIFICATION.md)。隐私政策见 [PRIVACY.md](PRIVACY.md)，开源核心代码遵循 [GPL-3.0 许可证](LICENSE)。

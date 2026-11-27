@@ -1,9 +1,9 @@
-import {DEFAULT_SETTINGS, configFor, isPageStatus, isVideoStatus, pageStatusOrIdle, videoStatusOrEmpty, type Settings, type TranslationInput, type TranslationResult,type TranslationObserver} from './core/types';
+import {DEFAULT_SETTINGS, configFor, isPageStatus, isVideoStatus, migrateDefaultProfile, pageStatusOrIdle, videoStatusOrEmpty, type Settings, type TranslationInput, type TranslationResult,type TranslationObserver} from './core/types';
 import {endpointFor,validateSettings,validateInput} from './core/validation';
 import {Scheduler} from './core/scheduler';
 import {adapterFor,retryDelayMs} from './core/provider';
 import {TranslationCache,cacheKey} from './core/cache';
-import {SharedWork} from './core/shared';
+import {SharedWork,pruneTabState} from './core/shared';
 import {createSpeechController} from './speech-background';
 import {isYouTubePage,type PlayerState} from './core/player';
 import {DEFAULT_CAPTION,captionGeometryPatch,migrateCaption,normalizeCaption,validateCaption,type CaptionLayout} from './core/caption-layout';
@@ -39,7 +39,7 @@ const initialized=(async()=>{
   await chrome.storage.local.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   await chrome.storage.session.setAccessLevel({accessLevel:'TRUSTED_CONTEXTS'});
   const local=await chrome.storage.local.get('settings');
-  if(local.settings){try{validateSettings(local.settings);settings=local.settings;}catch{ /* Keep recoverable defaults if an old configuration is malformed. */ }}
+  if(local.settings){try{validateSettings(local.settings);settings=local.settings;if(migrateDefaultProfile(settings))await chrome.storage.local.set({settings});}catch{ /* Keep recoverable defaults if an old configuration is malformed. */ }}
   const session=await chrome.storage.session.get(['translationCache','jobHistory','taskBudgets']);
   cache.load(session.translationCache??[]);
   for(const [key,value] of Object.entries(session.taskBudgets??{}))taskBudget.set(key,value as {chars:number;limit:number});
@@ -133,11 +133,11 @@ async function translate(input:TranslationInput,sender:chrome.runtime.MessageSen
           if(text&&text!==lastText){lastProgress=Date.now();lastText=text;chrome.tabs.sendMessage(tabId,{type:'video:subtitle-progress',requestId:input.requestId,text},{frameId}).catch(()=>{});}
           return;
         }
-        // A validated prefix is only for the one plain-text selection preview; final result is still fully validated.
-        if(input.kind!=='selection'||!profile.stream||Date.now()-lastProgress<100)return;
-        const match=raw.match(/"text"\s*:\s*"((?:[^"\\]|\\.)*)(?:"|$)/s);if(!match)return;
-        let text:string;try{text=JSON.parse(`"${match[1]}"`);}catch{return;}
-        lastProgress=Date.now();chrome.tabs.sendMessage(tabId,{type:'selection:progress',requestId:input.requestId,text},{frameId}).catch(()=>{});
+        // Validate single-segment selection streaming with the same bounded parser as live/video subtitles.
+        if(input.kind!=='selection'||!profile.stream||networkInput.blocks.length!==1||networkInput.blocks[0].segments.length!==1||Date.now()-lastProgress<80)return;
+        const source=networkInput.blocks[0].segments[0];
+        const text=streamSegment(raw,source.id,Math.max(500,source.text.length*12));
+        if(text&&text!==lastText){lastProgress=Date.now();lastText=text;chrome.tabs.sendMessage(tabId,{type:'selection:progress',requestId:input.requestId,text},{frameId}).catch(()=>{});}
       };
       let result;
       try{for(let attempt=0;attempt<2;attempt++){
@@ -225,7 +225,10 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
         await chrome.scripting.executeScript({target:{tabId},files:['video.js']});
         videoTabs.add(tabId);
         await chrome.tabs.sendMessage(tabId,{type:'video:start',config},{frameId:0});
-      }else if(!['active','connecting'].includes(current.state))await chrome.tabs.sendMessage(tabId,{type:'video:stop'},{frameId:0}).catch(()=>{});
+      }else if(!['active','connecting'].includes(current.state)){
+        videoTabs.delete(tabId);
+        await chrome.tabs.sendMessage(tabId,{type:'video:stop'},{frameId:0}).catch(()=>{});
+      }
     }
     return playerStatus(tabId);
   }
@@ -274,7 +277,8 @@ async function route(message:any,sender:chrome.runtime.MessageSender){
       if(!['start','stop','display','retry'].includes(message.action))throw new Error('不支持的视频操作。');
       if(message.action==='start'||message.action==='stop')await speech.route({type:'speech:stop'},sender);
       if(message.action==='display'||(message.action==='start'&&typeof message.bilingual==='boolean'))await saveCaption({showOriginal:message.bilingual!==false});
-      const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});videoTabs.add(tab.id!);
+      const tab=await activeTab();await chrome.scripting.executeScript({target:{tabId:tab.id!},files:['video.js']});
+      if(message.action==='stop')videoTabs.delete(tab.id!);else videoTabs.add(tab.id!);
       const config=await safeConfig();if(message.action==='start'&&!config.ready)throw new Error('请先配置 API Key 和模型。');
       const replied=await chrome.tabs.sendMessage(tab.id!,{type:`video:${message.action}`,config,bilingual:message.bilingual!==false},{frameId:0});
       if(isVideoStatus(replied))return replied;
@@ -306,6 +310,16 @@ chrome.runtime.onInstalled.addListener(async()=>{
 chrome.runtime.onStartup.addListener(()=>{initialized.then(registerSelection).catch(()=>{});});
 chrome.permissions.onRemoved.addListener(()=>registerSelection().catch(()=>{}));
 chrome.permissions.onAdded.addListener(()=>registerSelection().catch(()=>{}));
+chrome.tabs.onRemoved.addListener(tabId=>{
+  void initialized.then(async()=>{
+    const {budgetsChanged}=pruneTabState(tabId,{videoTabs,taskBudget,cancelledTasks,jobs});
+    storageWrites=storageWrites.catch(()=>{}).then(async()=>{
+      await chrome.storage.session.remove(`page:${tabId}`);
+      if(budgetsChanged)await chrome.storage.session.set({taskBudgets:Object.fromEntries(taskBudget)});
+    });
+    await storageWrites;
+  }).catch(()=>{});
+});
 chrome.contextMenus.onClicked.addListener(async(info,tab)=>{
   if(info.menuItemId!=='translate-selection'||!tab?.id||!info.selectionText)return;
   try{
